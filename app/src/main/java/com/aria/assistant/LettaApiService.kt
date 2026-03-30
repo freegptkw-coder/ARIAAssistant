@@ -1,5 +1,6 @@
 package com.aria.assistant
 
+import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,7 +14,7 @@ data class LettaResponse(
     val rootCommand: String? = null
 )
 
-class LettaApiService {
+class LettaApiService(private val context: Context) {
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)

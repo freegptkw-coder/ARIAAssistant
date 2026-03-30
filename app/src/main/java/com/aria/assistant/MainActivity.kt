@@ -36,7 +36,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private var ttsReady = false
     
-    private val lettaService = LettaApiService()
+    private lateinit var lettaService: LettaApiService
     private val rootExecutor = RootCommandExecutor()
     
     private val RECORD_AUDIO_PERMISSION = 100
