@@ -21,10 +21,16 @@ class LettaApiService {
         .build()
     
     private val gson = Gson()
+    private val prefs = context.getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
     
-    // TODO: Replace with actual Letta API endpoint and agent ID
-    private val baseUrl = "https://api.letta.com"
-    private val agentId = "agent-82cf249d-d11f-47bb-a3d3-92458a13c4ea"
+    private val baseUrl: String
+        get() = prefs.getString("api_endpoint", "https://api.letta.com") ?: "https://api.letta.com"
+    
+    private val agentId: String
+        get() = prefs.getString("agent_id", "agent-82cf249d-d11f-47bb-a3d3-92458a13c4ea") ?: "agent-82cf249d-d11f-47bb-a3d3-92458a13c4ea"
+    
+    private val apiKey: String?
+        get() = prefs.getString("api_key", null)
     
     fun sendMessage(message: String): LettaResponse {
         val json = """
