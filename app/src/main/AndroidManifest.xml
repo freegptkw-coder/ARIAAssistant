@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.aria.assistant">
 
     <!-- Permissions -->
@@ -44,6 +45,24 @@
             android:name=".ProactiveService"
             android:enabled="true"
             android:exported="false"/>
+    </application>
+
+</manifest>
+"
+            android:parentActivityName=".MainActivity"/>
+        
+        <service
+            android:name=".ProactiveService"
+            android:enabled="true"
+            android:exported="false"/>
+    </application>
+
+</manifest>
+       </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config"/>
+        </service>
     </application>
 
 </manifest>

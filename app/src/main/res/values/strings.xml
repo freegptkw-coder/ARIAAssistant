@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ARIA Assistant</string>
-    <string name="listening">Listening...</string>
-    <string name="processing">Processing...</string>
+    <string name="accessibility_service_description">
+        ARIA Accessibility Service allows full phone control including:
+        - Screen reading and UI automation
+        - Button clicking and text input
+        - App navigation and control
+        - Advanced voice command execution
+        
+        This service requires accessibility permission to function properly.
+    </string>
 </resources>
