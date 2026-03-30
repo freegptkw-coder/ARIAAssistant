@@ -11,39 +11,47 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <com.google.android.material.textfield.TextInputLayout
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="API Endpoint"
-            app:boxBackgroundColor="#2D2D2D"
-            android:layout_marginBottom="16dp">
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/apiEndpointInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="#FFFFFF"/>
-        </com.google.android.material.textfield.TextInputLayout>
+            android:text="⚡ AI Provider"
+            android:textColor="#FFA726"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="12dp"/>
+
+        <Spinner
+            android:id="@+id/providerSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="#2D2D2D"
+            android:padding="16dp"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🤖 Model"
+            android:textColor="#4CAF50"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="12dp"/>
+
+        <Spinner
+            android:id="@+id/modelSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="#2D2D2D"
+            android:padding="16dp"
+            android:layout_marginBottom="24dp"/>
 
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Agent ID"
-            app:boxBackgroundColor="#2D2D2D"
-            android:layout_marginBottom="16dp">
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/agentIdInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="#FFFFFF"/>
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="API Key (Optional)"
+            android:hint="🔑 API Key"
             app:boxBackgroundColor="#2D2D2D"
             app:endIconMode="password_toggle"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="24dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/apiKeyInput"
                 android:layout_width="match_parent"
@@ -59,12 +67,12 @@
             android:gravity="center_vertical"
             android:background="#2D2D2D"
             android:padding="16dp"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="24dp">
             <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Dark Mode"
+                android:text="🌙 Dark Mode"
                 android:textColor="#FFFFFF"
                 android:textSize="16sp"/>
             <com.google.android.material.switchmaterial.SwitchMaterial
@@ -78,7 +86,8 @@
             android:id="@+id/saveButton"
             android:layout_width="match_parent"
             android:layout_height="60dp"
-            android:text="Save Settings"
+            android:text="💾 Save Settings"
+            android:textSize="16sp"
             app:cornerRadius="12dp"
             app:backgroundTint="#4CAF50"/>
 
