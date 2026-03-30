@@ -35,6 +35,17 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity"/>
+        
+        <service
+            android:name=".ProactiveService"
+            android:enabled="true"
+            android:exported="false"/>
+    </application>
+
+</manifest>
+   android:name=".SettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"/>
     </application>
 
 </manifest>
