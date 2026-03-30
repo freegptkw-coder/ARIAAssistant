@@ -13,6 +13,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.BATTERY_STATS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
     <!-- Root permissions (device must be rooted) -->
     <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
@@ -45,20 +49,14 @@
             android:name=".ProactiveService"
             android:enabled="true"
             android:exported="false"/>
-    </application>
-
-</manifest>
-"
-            android:parentActivityName=".MainActivity"/>
         
         <service
-            android:name=".ProactiveService"
-            android:enabled="true"
-            android:exported="false"/>
-    </application>
-
-</manifest>
-       </intent-filter>
+            android:name=".ARIAAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config"/>
