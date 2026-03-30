@@ -17,15 +17,27 @@ data class LettaResponse(
 class LettaApiService(private val context: Context) {
     
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
         .build()
     
     private val gson = Gson()
     private val prefs = context.getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
     
+    private val provider: String
+        get() = prefs.getString("ai_provider", "groq") ?: "groq"
+    
     private val baseUrl: String
-        get() = prefs.getString("api_endpoint", "https://api.letta.com") ?: "https://api.letta.com"
+        get() = when(provider) {
+            "openrouter" -> "https://openrouter.ai/api/v1"
+            "groq" -> "https://api.groq.com/openai/v1"
+            "gemini" -> "https://generativelanguage.googleapis.com/v1beta"
+            else -> prefs.getString("api_endpoint", "https://api.letta.com") ?: "https://api.letta.com"
+        }
+    
+    private val model: String
+        get() = prefs.getString("model", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
     
     private val agentId: String
         get() = prefs.getString("agent_id", "agent-82cf249d-d11f-47bb-a3d3-92458a13c4ea") ?: "agent-82cf249d-d11f-47bb-a3d3-92458a13c4ea"
@@ -34,22 +46,30 @@ class LettaApiService(private val context: Context) {
         get() = prefs.getString("api_key", null)
     
     fun sendMessage(message: String): LettaResponse {
-        val json = """
-            {
-                "message": "$message"
-            }
-        """.trimIndent()
+        val json = when(provider) {
+            "letta" -> """{"message": "$message"}"""
+            "gemini" -> """{"contents":[{"parts":[{"text":"$message"}]}]}"""
+            else -> """{"model": "$model", "messages": [{"role": "user", "content": "$message"}], "stream": false}"""
+        }
         
         val requestBody = json.toRequestBody("application/json".toMediaType())
         
+        val url = when(provider) {
+            "letta" -> "$baseUrl/v1/agents/$agentId/messages"
+            "gemini" -> "$baseUrl/models/$model:generateContent?key=$apiKey"
+            else -> "$baseUrl/chat/completions"
+        }
+        
         val requestBuilder = Request.Builder()
-            .url("$baseUrl/v1/agents/$agentId/messages")
+            .url(url)
             .post(requestBody)
             .addHeader("Content-Type", "application/json")
         
-        // Add API key if provided
-        apiKey?.let {
-            requestBuilder.addHeader("Authorization", "Bearer $it")
+        // Add API key if provided (not for Gemini - uses query param)
+        if (provider != "gemini") {
+            apiKey?.let {
+                requestBuilder.addHeader("Authorization", "Bearer $it")
+            }
         }
         
         val request = requestBuilder.build()
