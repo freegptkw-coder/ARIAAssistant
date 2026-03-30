@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var messageInput: EditText
     private lateinit var voiceButton: MaterialButton
     private lateinit var sendButton: MaterialButton
+    private lateinit var settingsButton: MaterialButton
     
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var tts: TextToSpeech
@@ -53,6 +54,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         messageInput = findViewById(R.id.messageInput)
         voiceButton = findViewById(R.id.voiceButton)
         sendButton = findViewById(R.id.sendButton)
+        settingsButton = findViewById(R.id.settingsButton)
         
         // Initialize TTS
         tts = TextToSpeech(this, this)
