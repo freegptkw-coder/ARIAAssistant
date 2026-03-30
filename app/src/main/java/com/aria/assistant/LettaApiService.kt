@@ -44,10 +44,18 @@ class LettaApiService(private val context: Context) {
         val apiKey = getApiKey()
         val baseUrl = getBaseUrl()
         
+        // Get personality and user info
+        val personality = prefs.getString("personality", "girlfriend") ?: "girlfriend"
+        val userName = prefs.getString("user_name", "") ?: ""
+        val nickname = prefs.getString("nickname", "") ?: ""
+        
+        // Build system prompt
+        val systemPrompt = PersonalityPrompts.getSystemPrompt(personality, userName, nickname)
+        
         val json = when(provider) {
-            "gemini" -> """{"contents":[{"parts":[{"text":"$message"}]}]}"""
+            "gemini" -> """{"contents":[{"parts":[{"text":"$systemPrompt\n\nUser: $message"}]}]}"""
             "letta" -> """{"message": "$message"}"""
-            else -> """{"model": "$model", "messages": [{"role": "user", "content": "$message"}], "stream": false}"""
+            else -> """{"model": "$model", "messages": [{"role": "system", "content": "$systemPrompt"}, {"role": "user", "content": "$message"}], "stream": false}"""
         }
         
         val requestBody = json.toRequestBody("application/json".toMediaType())

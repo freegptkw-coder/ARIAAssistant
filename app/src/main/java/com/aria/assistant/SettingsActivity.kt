@@ -1,6 +1,7 @@
 package com.aria.assistant
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.view.View
@@ -17,11 +18,23 @@ import com.google.android.material.textfield.TextInputEditText
 class SettingsActivity : AppCompatActivity() {
     
     private lateinit var prefs: SharedPreferences
+    private lateinit var personalitySpinner: Spinner
+    private lateinit var userNameInput: TextInputEditText
+    private lateinit var nicknameInput: TextInputEditText
     private lateinit var providerSpinner: Spinner
     private lateinit var modelSpinner: Spinner
     private lateinit var apiKeyInput: TextInputEditText
+    private lateinit var proactiveSwitch: SwitchMaterial
     private lateinit var themeSwitch: SwitchMaterial
     private lateinit var saveButton: MaterialButton
+    
+    private val personalities = arrayOf(
+        "💕 Girlfriend (Sweet & Caring)",
+        "😊 Friendly (Buddy)",
+        "👔 Professional (Formal)",
+        "🤖 Assistant (Default)"
+    )
+    private val personalityValues = arrayOf("girlfriend", "friendly", "professional", "assistant")
     
     private val providers = arrayOf("Groq (Fast & Free)", "OpenRouter", "Google Gemini", "Letta")
     private val providerValues = arrayOf("groq", "openrouter", "gemini", "letta")
@@ -40,12 +53,17 @@ class SettingsActivity : AppCompatActivity() {
         
         prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
         
+        personalitySpinner = findViewById(R.id.personalitySpinner)
+        userNameInput = findViewById(R.id.userNameInput)
+        nicknameInput = findViewById(R.id.nicknameInput)
         providerSpinner = findViewById(R.id.providerSpinner)
         modelSpinner = findViewById(R.id.modelSpinner)
         apiKeyInput = findViewById(R.id.apiKeyInput)
+        proactiveSwitch = findViewById(R.id.proactiveSwitch)
         themeSwitch = findViewById(R.id.themeSwitch)
         saveButton = findViewById(R.id.saveButton)
         
+        setupPersonalitySpinner()
         setupProviderSpinner()
         loadSettings()
         
@@ -56,6 +74,12 @@ class SettingsActivity : AppCompatActivity() {
                 else AppCompatDelegate.MODE_NIGHT_NO
             )
         }
+    }
+    
+    private fun setupPersonalitySpinner() {
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, personalities)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        personalitySpinner.adapter = adapter
     }
     
     private fun setupProviderSpinner() {
@@ -89,20 +113,38 @@ class SettingsActivity : AppCompatActivity() {
     }
     
     private fun loadSettings() {
-        val savedProvider = prefs.getString("ai_provider", "groq") ?: "groq"
-        val index = providerValues.indexOf(savedProvider)
-        if (index >= 0) providerSpinner.setSelection(index)
+        // Load personality
+        val savedPersonality = prefs.getString("personality", "girlfriend") ?: "girlfriend"
+        val persIndex = personalityValues.indexOf(savedPersonality)
+        if (persIndex >= 0) personalitySpinner.setSelection(persIndex)
         
+        // Load personal info
+        userNameInput.setText(prefs.getString("user_name", ""))
+        nicknameInput.setText(prefs.getString("nickname", ""))
+        
+        // Load provider
+        val savedProvider = prefs.getString("ai_provider", "groq") ?: "groq"
+        val provIndex = providerValues.indexOf(savedProvider)
+        if (provIndex >= 0) providerSpinner.setSelection(provIndex)
+        
+        // Load API key
         apiKeyInput.setText(prefs.getString("api_key", ""))
+        
+        // Load switches
+        proactiveSwitch.isChecked = prefs.getBoolean("proactive_enabled", true)
         themeSwitch.isChecked = prefs.getBoolean("dark_mode", true)
         
         updateModelSpinner(savedProvider)
     }
     
     private fun saveSettings() {
+        val personality = personalityValues[personalitySpinner.selectedItemPosition]
+        val userName = userNameInput.text.toString()
+        val nickname = nicknameInput.text.toString()
         val provider = providerValues[providerSpinner.selectedItemPosition]
         val model = modelSpinner.selectedItem.toString()
         val apiKey = apiKeyInput.text.toString()
+        val proactiveEnabled = proactiveSwitch.isChecked
         
         if (apiKey.isEmpty()) {
             Toast.makeText(this, "⚠️ API Key required!", Toast.LENGTH_SHORT).show()
@@ -110,14 +152,27 @@ class SettingsActivity : AppCompatActivity() {
         }
         
         prefs.edit().apply {
+            putString("personality", personality)
+            putString("user_name", userName)
+            putString("nickname", nickname)
             putString("ai_provider", provider)
             putString("model", model)
             putString("api_key", apiKey)
+            putBoolean("proactive_enabled", proactiveEnabled)
             putBoolean("dark_mode", themeSwitch.isChecked)
             apply()
         }
         
-        Toast.makeText(this, "✅ Settings saved! Provider: ${providers[providerSpinner.selectedItemPosition]}", Toast.LENGTH_LONG).show()
+        // Start/stop proactive service
+        val serviceIntent = Intent(this, ProactiveService::class.java)
+        if (proactiveEnabled && personality == "girlfriend") {
+            startService(serviceIntent)
+        } else {
+            stopService(serviceIntent)
+        }
+        
+        val personalityName = personalities[personalitySpinner.selectedItemPosition]
+        Toast.makeText(this, "✅ Settings saved!\nMode: $personalityName", Toast.LENGTH_LONG).show()
         finish()
     }
     
