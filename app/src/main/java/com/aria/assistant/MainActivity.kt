@@ -73,6 +73,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
         
+        settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        
         voiceButton.setOnClickListener {
             startVoiceRecognition()
         }
