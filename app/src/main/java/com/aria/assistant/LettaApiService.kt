@@ -70,16 +70,33 @@ class LettaApiService(private val context: Context) {
         try {
             val jsonObject = JsonParser.parseString(jsonResponse).asJsonObject
             
-            // Extract assistant's text response
-            val messages = jsonObject.getAsJsonArray("messages")
-            var assistantText = ""
-            
-            for (msg in messages) {
-                val msgObj = msg.asJsonObject
-                if (msgObj.has("message_type") && 
-                    msgObj.get("message_type").asString == "assistant_message") {
-                    assistantText = msgObj.get("message").asString
-                    break
+            var assistantText = when(provider) {
+                "letta" -> {
+                    val messages = jsonObject.getAsJsonArray("messages")
+                    var text = ""
+                    for (msg in messages) {
+                        val msgObj = msg.asJsonObject
+                        if (msgObj.has("message_type") && 
+                            msgObj.get("message_type").asString == "assistant_message") {
+                            text = msgObj.get("message").asString
+                            break
+                        }
+                    }
+                    text
+                }
+                "gemini" -> {
+                    jsonObject.getAsJsonArray("candidates")
+                        ?.get(0)?.asJsonObject
+                        ?.getAsJsonObject("content")
+                        ?.getAsJsonArray("parts")
+                        ?.get(0)?.asJsonObject
+                        ?.get("text")?.asString ?: "No response"
+                }
+                else -> {
+                    jsonObject.getAsJsonArray("choices")
+                        ?.get(0)?.asJsonObject
+                        ?.getAsJsonObject("message")
+                        ?.get("content")?.asString ?: "No response"
                 }
             }
             
