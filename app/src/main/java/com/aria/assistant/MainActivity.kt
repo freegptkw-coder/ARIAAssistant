@@ -144,10 +144,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Add user message to chat
         addUserMessage(message)
         
+        // Check for voice commands first
+        val voiceCommand = VoiceCommandParser.parseCommand(message)
+        
+        if (voiceCommand.shouldExecute && voiceCommand.type != CommandType.NONE) {
+            // Execute command and get response
+            val commandResponse = VoiceCommandParser.executeCommand(this, voiceCommand)
+            addAssistantMessage(commandResponse)
+            
+            // Also speak it
+            if (ttsReady) {
+                tts.speak(commandResponse, TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+            return
+        }
+        
         // Show processing indicator
         addAssistantMessage("Processing...")
         
-        // Send to Letta API
+        // Send to AI API
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = lettaService.sendMessage(message)

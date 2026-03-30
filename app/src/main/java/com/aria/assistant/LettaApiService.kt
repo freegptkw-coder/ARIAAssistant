@@ -145,11 +145,3 @@ class LettaApiService(private val context: Context) {
         }
     }
 }
-     }
-            
-            return LettaResponse(assistantText)
-        } catch (e: Exception) {
-            throw Exception("Parse error: ${e.message}")
-        }
-    }
-}
