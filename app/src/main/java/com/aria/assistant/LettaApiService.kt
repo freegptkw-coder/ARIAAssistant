@@ -97,7 +97,12 @@ class LettaApiService(private val context: Context) {
         }
         
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
-        return parseResponse(responseBody, provider)
+        val parsedResponse = parseResponse(responseBody, provider)
+        
+        // Save assistant response to memory
+        ConversationMemory.addMessage(context, "assistant", parsedResponse.text)
+        
+        return parsedResponse
     }
     
     private fun parseResponse(jsonResponse: String, provider: String): LettaResponse {
@@ -133,6 +138,14 @@ class LettaApiService(private val context: Context) {
                         ?.get("content")?.asString ?: "No response"
                 }
             }
+            
+            return LettaResponse(assistantText)
+        } catch (e: Exception) {
+            throw Exception("Parse error: ${e.message}")
+        }
+    }
+}
+     }
             
             return LettaResponse(assistantText)
         } catch (e: Exception) {
