@@ -32,10 +32,18 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/settingsButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:text="⚙️"
-            android:textSize="20sp"
+            android:textSize="24sp"
+            android:padding="8dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:clickable="true"
+            android:focusable="true"
+            app:cornerRadius="28dp"
+            app:backgroundTint="#3A3A3A"
+            app:rippleColor="#FFFFFF"
             style="@style/Widget.MaterialComponents.Button.TextButton"/>
     </LinearLayout>
 
