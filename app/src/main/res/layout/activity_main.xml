@@ -91,6 +91,16 @@
             android:layout_marginStart="8dp"
             app:cornerRadius="28dp"
             style="@style/Widget.MaterialComponents.Button.Icon" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/settingsButton"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:text="⚙️"
+            android:textSize="22sp"
+            android:layout_marginStart="8dp"
+            app:cornerRadius="28dp"
+            app:backgroundTint="#FF9800" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
