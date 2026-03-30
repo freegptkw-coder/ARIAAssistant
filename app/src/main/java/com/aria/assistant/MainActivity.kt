@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         
         // Welcome message
-        addAssistantMessage("Hello! I'm ARIA. How can I help you?")
+        addAssistantMessage("Hello! I'm ARIA Assistant. How can I help you?")
     }
     
     private fun checkPermissions() {
