@@ -42,11 +42,17 @@ class LettaApiService(private val context: Context) {
         
         val requestBody = json.toRequestBody("application/json".toMediaType())
         
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$baseUrl/v1/agents/$agentId/messages")
             .post(requestBody)
             .addHeader("Content-Type", "application/json")
-            .build()
+        
+        // Add API key if provided
+        apiKey?.let {
+            requestBuilder.addHeader("Authorization", "Bearer $it")
+        }
+        
+        val request = requestBuilder.build()
         
         val response = client.newCall(request).execute()
         
