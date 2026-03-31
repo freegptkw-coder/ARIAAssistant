@@ -44,6 +44,17 @@ class SafeAutomationExecutor(private val context: Context) {
                 continue
             }
 
+            if (SafeAutomationPolicy.shouldRequireConfirmation(task)) {
+                val guard = SensitiveScreenGuard.evaluate(context)
+                if (guard.blocked) {
+                    blocked++
+                    val msg = "blocked:${task.type}:sensitive_screen:${guard.reason}"
+                    details += msg
+                    AutomationAuditLogger.log(context, "$msg:${guard.evidence}")
+                    continue
+                }
+            }
+
             when (task.type) {
                 SafeTaskTypes.LAUNCH_MULTIPLE_APPS -> {
                     val apps = task.targetApps.orEmpty().ifEmpty { task.app?.let { listOf(it) } ?: emptyList() }
