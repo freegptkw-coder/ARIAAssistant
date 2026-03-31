@@ -305,6 +305,50 @@
                 android:checked="true"/>
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#2D2D2D"
+            android:padding="16dp"
+            android:layout_marginBottom="12dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔴 Live Mode (Foreground Mic)"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"/>
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/liveModeSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="false"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#2D2D2D"
+            android:padding="16dp"
+            android:layout_marginBottom="16dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="👁 Live Vision Loop (Opt-in only)"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"/>
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/liveVisionSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="false"/>
+        </LinearLayout>
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/rootSafetyCenterButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"

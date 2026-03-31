@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
+import com.aria.assistant.live.LiveModeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,6 +49,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var wakeWordSwitch: SwitchMaterial
     private lateinit var banglaModeSwitch: SwitchMaterial
     private lateinit var safeRootSwitch: SwitchMaterial
+    private lateinit var liveModeSwitch: SwitchMaterial
+    private lateinit var liveVisionSwitch: SwitchMaterial
     private lateinit var rootSafetyCenterButton: MaterialButton
     private lateinit var saveButton: MaterialButton
 
@@ -102,6 +105,8 @@ class SettingsActivity : AppCompatActivity() {
         wakeWordSwitch = findViewById(R.id.wakeWordSwitch)
         banglaModeSwitch = findViewById(R.id.banglaModeSwitch)
         safeRootSwitch = findViewById(R.id.safeRootSwitch)
+        liveModeSwitch = findViewById(R.id.liveModeSwitch)
+        liveVisionSwitch = findViewById(R.id.liveVisionSwitch)
         rootSafetyCenterButton = findViewById(R.id.rootSafetyCenterButton)
         saveButton = findViewById(R.id.saveButton)
 
@@ -212,6 +217,8 @@ class SettingsActivity : AppCompatActivity() {
         wakeWordSwitch.isChecked = prefs.getBoolean("wake_word_enabled", true)
         banglaModeSwitch.isChecked = prefs.getBoolean("bangla_mode", true)
         safeRootSwitch.isChecked = prefs.getBoolean("safe_root_guard", true)
+        liveModeSwitch.isChecked = prefs.getBoolean("live_mode_enabled", false)
+        liveVisionSwitch.isChecked = prefs.getBoolean("live_vision_enabled", false)
 
         val lang = prefs.getString("speech_recognition_lang", "auto") ?: "auto"
         speechLanguageValues.indexOf(lang).takeIf { it >= 0 }?.let { speechLanguageSpinner.setSelection(it) }
@@ -316,7 +323,15 @@ class SettingsActivity : AppCompatActivity() {
             putBoolean("wake_word_enabled", wakeWordSwitch.isChecked)
             putBoolean("bangla_mode", banglaModeSwitch.isChecked)
             putBoolean("safe_root_guard", safeRootSwitch.isChecked)
+            putBoolean("live_mode_enabled", liveModeSwitch.isChecked)
+            putBoolean("live_vision_enabled", liveVisionSwitch.isChecked)
             apply()
+        }
+
+        if (liveModeSwitch.isChecked) {
+            LiveModeController.start(this)
+        } else {
+            LiveModeController.stop(this)
         }
 
         val serviceIntent = Intent(this, ProactiveService::class.java)
