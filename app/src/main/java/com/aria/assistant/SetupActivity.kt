@@ -141,7 +141,22 @@ class SetupActivity : AppCompatActivity(), SetupHost {
         return try {
             if (!rootExecutor.checkRootAccess()) return false
             val component = "$packageName/.AssistantActivity"
-            val result = rootExecutor.execute("settings put secure assistant '$component'")
+            val command = "settings put secure assistant '$component'"
+
+            val decision = RootSafetyPolicy.evaluate(this, command)
+            if (!decision.allowed) {
+                RootSafetyPolicy.appendAudit(this, command, "BLOCKED", decision.reason)
+                return false
+            }
+
+            val result = rootExecutor.execute(command)
+            val isError = result.lowercase(Locale.getDefault()).contains("error")
+            RootSafetyPolicy.appendAudit(
+                this,
+                command,
+                if (isError) "FAILED" else "OK",
+                if (isError) result.take(200) else "assistant fallback applied"
+            )
             !result.lowercase(Locale.getDefault()).contains("error")
         } catch (_: Exception) {
             false

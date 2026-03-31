@@ -2,6 +2,7 @@ package com.aria.assistant
 
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 class RootCommandExecutor {
     
@@ -9,21 +10,21 @@ class RootCommandExecutor {
         return try {
             // Execute command with root privileges
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-            
-            // Read output
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val output = StringBuilder()
-            var line: String?
-            
-            while (reader.readLine().also { line = it } != null) {
-                output.append(line).append("\n")
+
+            val completed = process.waitFor(10, TimeUnit.SECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                return "Error executing command: timeout"
             }
-            
-            // Wait for process to complete
-            process.waitFor()
-            
-            val result = output.toString().trim()
-            result.ifEmpty { "Command executed successfully" }
+
+            val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }.trim()
+            val error = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText() }.trim()
+
+            when {
+                error.isNotBlank() -> "Error executing command: $error"
+                output.isNotBlank() -> output
+                else -> "Command executed successfully"
+            }
         } catch (e: Exception) {
             "Error executing command: ${e.message}"
         }
@@ -32,9 +33,13 @@ class RootCommandExecutor {
     fun checkRootAccess(): Boolean {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val output = reader.readLine()
-            process.waitFor()
+            val completed = process.waitFor(5, TimeUnit.SECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                return false
+            }
+
+            val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readLine() }
             
             // Check if output contains "uid=0" (root)
             output?.contains("uid=0") == true

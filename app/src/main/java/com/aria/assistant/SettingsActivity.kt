@@ -141,7 +141,9 @@ class SettingsActivity : AppCompatActivity() {
 
         providerSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                updateModelSpinner(providerValues[position])
+                val providerId = providerValues[position]
+                updateModelSpinner(providerId)
+                loadProviderApiKey(providerId)
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -211,7 +213,7 @@ class SettingsActivity : AppCompatActivity() {
         val savedProvider = prefs.getString("ai_provider", "groq") ?: "groq"
         providerValues.indexOf(savedProvider).takeIf { it >= 0 }?.let { providerSpinner.setSelection(it) }
 
-        apiKeyInput.setText(SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "api_key_enc", "api_key"))
+        loadProviderApiKey(savedProvider)
 
         val savedTtsProvider = prefs.getString("tts_provider", "android") ?: "android"
         ttsProviderValues.indexOf(savedTtsProvider).takeIf { it >= 0 }?.let { ttsProviderSpinner.setSelection(it) }
@@ -231,6 +233,17 @@ class SettingsActivity : AppCompatActivity() {
 
         updateModelSpinner(savedProvider)
         updateVoiceSpinner(savedTtsProvider)
+    }
+
+    private fun loadProviderApiKey(providerId: String) {
+        val providerKey = SecurePrefs.getDecryptedString(
+            this,
+            "ARIA_PREFS",
+            "api_key_${providerId}_enc",
+            "api_key_${providerId}"
+        )
+        val fallback = SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "api_key_enc", "api_key")
+        apiKeyInput.setText(if (providerKey.isNotBlank()) providerKey else fallback)
     }
 
     private fun testVoiceConfig() {
@@ -318,6 +331,8 @@ class SettingsActivity : AppCompatActivity() {
             putString("model", model)
             putString("api_key_enc", SecurePrefs.encrypt(apiKey))
             putString("api_key", "")
+            putString("api_key_${provider}_enc", SecurePrefs.encrypt(apiKey))
+            putString("api_key_${provider}", "")
             putString("tts_provider", ttsProvider)
             putString("voice_id", voiceId)
             putString("voice_name", voiceName)
