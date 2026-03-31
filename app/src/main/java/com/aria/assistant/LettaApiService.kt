@@ -42,12 +42,39 @@ class LettaApiService(private val context: Context) {
             else -> prefs.getString("api_endpoint", "https://api.letta.com") ?: "https://api.letta.com"
         }
     }
+
+    private fun getBaseUrl(provider: String): String {
+        return when(provider) {
+            "groq" -> "https://api.groq.com/openai/v1"
+            "openrouter" -> "https://openrouter.ai/api/v1"
+            "gemini" -> "https://generativelanguage.googleapis.com/v1beta"
+            else -> prefs.getString("api_endpoint", "https://api.letta.com") ?: "https://api.letta.com"
+        }
+    }
+
+    private fun getDefaultModel(provider: String): String {
+        return when (provider) {
+            "groq" -> "llama-3.3-70b-versatile"
+            "openrouter" -> "meta-llama/llama-3.3-70b-instruct"
+            "gemini" -> "gemini-1.5-flash"
+            else -> "default"
+        }
+    }
+
+    private fun getApiKey(provider: String): String? {
+        val providerSpecific = SecurePrefs.getDecryptedString(
+            context,
+            "ARIA_PREFS",
+            "api_key_${provider}_enc",
+            "api_key_${provider}"
+        )
+        if (providerSpecific.isNotBlank()) return providerSpecific
+        return getApiKey()
+    }
     
     fun sendMessage(message: String): LettaResponse {
-        val provider = getProvider()
-        val model = getModel()
-        val apiKey = getApiKey()
-        val baseUrl = getBaseUrl()
+        val selectedProvider = getProvider()
+        val selectedModel = getModel()
 
         // Get personality and user info
         val personality = prefs.getString("personality", "girlfriend") ?: "girlfriend"
@@ -77,6 +104,71 @@ class LettaApiService(private val context: Context) {
         // Memory context (last 40 turns)
         val historyMessages = ConversationMemory.getMessages(context)
 
+        // Save user message to memory before request completes
+        ConversationMemory.addMessage(context, "user", message)
+
+        val fallbackOrderRaw = prefs.getString("ai_fallback_order", "")
+            .orEmpty()
+            .split(',')
+            .map { it.trim().lowercase() }
+            .filter { it.isNotBlank() }
+
+        val providerChain = linkedSetOf<String>().apply {
+            add(selectedProvider)
+            if (fallbackOrderRaw.isNotEmpty()) {
+                addAll(fallbackOrderRaw)
+            } else {
+                addAll(listOf("groq", "gemini", "openrouter", "letta"))
+            }
+        }.toList()
+
+        val errors = mutableListOf<String>()
+
+        providerChain.forEach { provider ->
+            val apiKey = getApiKey(provider)
+            if (provider != "letta" && apiKey.isNullOrBlank()) {
+                errors += "$provider: missing api key"
+                AiReliabilityLogger.log(context, "skip provider=$provider reason=missing_key")
+                return@forEach
+            }
+
+            val model = if (provider == selectedProvider) selectedModel else getDefaultModel(provider)
+
+            try {
+                val response = sendMessageWithProvider(
+                    provider = provider,
+                    model = model,
+                    apiKey = apiKey,
+                    systemPrompt = systemPrompt,
+                    message = message,
+                    historyMessages = historyMessages
+                )
+
+                if (provider != selectedProvider) {
+                    AiReliabilityLogger.log(context, "fallback success selected=$selectedProvider used=$provider")
+                }
+
+                ConversationMemory.addMessage(context, "assistant", response.text)
+                return response
+            } catch (e: Exception) {
+                val reason = e.message ?: "unknown_error"
+                errors += "$provider: $reason"
+                AiReliabilityLogger.log(context, "provider failure provider=$provider reason=$reason")
+            }
+        }
+
+        throw Exception("All AI providers failed: ${errors.joinToString(" | ")}")
+    }
+
+    private fun sendMessageWithProvider(
+        provider: String,
+        model: String,
+        apiKey: String?,
+        systemPrompt: String,
+        message: String,
+        historyMessages: List<Message>
+    ): LettaResponse {
+        val baseUrl = getBaseUrl(provider)
         val url = when (provider) {
             "gemini" -> "$baseUrl/models/$model:generateContent?key=$apiKey"
             "letta" -> "$baseUrl/v1/agents/${prefs.getString("agent_id", "")}/messages"
@@ -136,22 +228,13 @@ class LettaApiService(private val context: Context) {
             apiKey?.let { requestBuilder.addHeader("Authorization", "Bearer $it") }
         }
 
-        // Save user message to memory before request completes
-        ConversationMemory.addMessage(context, "user", message)
-
         val response = client.newCall(requestBuilder.build()).execute()
-
         if (!response.isSuccessful) {
             throw Exception("API error ${response.code}: ${response.message}")
         }
 
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
-        val parsedResponse = parseResponse(responseBody, provider)
-
-        // Save assistant response to memory
-        ConversationMemory.addMessage(context, "assistant", parsedResponse.text)
-
-        return parsedResponse
+        return parseResponse(responseBody, provider)
     }
 
     private fun parseResponse(jsonResponse: String, provider: String): LettaResponse {

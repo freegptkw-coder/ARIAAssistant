@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.aria.assistant.AiReliabilityLogger
 import com.aria.assistant.R
 import com.aria.assistant.automation.AutomationAuditLogger
 import com.google.android.material.button.MaterialButton
@@ -48,6 +49,7 @@ class LiveSafetyActivity : AppCompatActivity() {
                 .remove("live_mode_audit")
                 .apply()
             AutomationAuditLogger.clear(this)
+            AiReliabilityLogger.clear(this)
             refreshUi()
         }
 
@@ -58,6 +60,8 @@ class LiveSafetyActivity : AppCompatActivity() {
                 append(AuditLogger.read(this@LiveSafetyActivity))
                 append("\n\n== Automation Audit ==\n")
                 append(AutomationAuditLogger.read(this@LiveSafetyActivity))
+                append("\n\n== AI Reliability ==\n")
+                append(AiReliabilityLogger.read(this@LiveSafetyActivity))
             }
             val share = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
