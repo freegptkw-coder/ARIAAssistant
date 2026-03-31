@@ -60,6 +60,16 @@ class LettaApiService(private val context: Context) {
         val wantsBangla = hasBanglaText || message.lowercase().contains("bangla") || message.contains("বাংলা")
 
         var systemPrompt = PersonalityPrompts.getSystemPrompt(personality, userName, nickname)
+        systemPrompt += """
+
+            Safety automation rules:
+            - Never output raw shell/root commands.
+            - For device automation requests, respond with a warm Banglalish acknowledgement, then include a JSON object only using safe intents.
+            - Preferred JSON formats:
+              1) {"action":"launch_multiple_apps","target_apps":["whatsapp","chrome"]}
+              2) {"action":"automation_request","tasks":[{"type":"read_incoming_sms","enabled":true,"risk_level":"low","require_confirmation":false}]}
+            - Sensitive tasks (send_sms, social_post, contact_edit) must set "require_confirmation": true.
+        """.trimIndent()
         if (banglaModeEnabled && wantsBangla) {
             systemPrompt += "\n\nLanguage rule: Reply in natural Bangla/Banglish. Keep it warm, simple, and easy for TTS."
         }

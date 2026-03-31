@@ -20,9 +20,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.aria.assistant.automation.AutomationAuditLogger
+import com.aria.assistant.automation.ParsedAutomationCommand
+import com.aria.assistant.automation.SafeIntentEnvelope
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,7 +62,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     private lateinit var lettaService: LettaApiService
-    private val rootExecutor = RootCommandExecutor()
+    private var pendingConfirmationEnvelope: SafeIntentEnvelope? = null
     
     private val RECORD_AUDIO_PERMISSION = 100
     private var recognitionRetryCount = 0
@@ -280,17 +282,39 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun sendMessage(message: String) {
         // Add user message to chat
         addUserMessage(message)
+
+        val normalized = message.trim().lowercase(Locale.getDefault())
+
+        pendingConfirmationEnvelope?.let { pending ->
+            when {
+                isConfirmMessage(normalized) -> {
+                    pendingConfirmationEnvelope = null
+                    val ack = "Dhonnobad, sensitive task confirm peyechi. Ekhon safe automation execute kortesi."
+                    addAssistantMessage(ack)
+                    enqueueSpeech(ack)
+                    executeSafeIntent(pending)
+                    return
+                }
+                isCancelMessage(normalized) -> {
+                    pendingConfirmationEnvelope = null
+                    val ack = "Thik ache, sensitive task cancel kore dilam ✅"
+                    addAssistantMessage(ack)
+                    enqueueSpeech(ack)
+                    return
+                }
+                else -> {
+                    val ack = "Ager sensitive request pending ache. Bolun 'confirm' or 'cancel'."
+                    addAssistantMessage(ack)
+                    enqueueSpeech(ack)
+                    return
+                }
+            }
+        }
         
-        // Check for voice commands first
-        val voiceCommand = VoiceCommandParser.parseCommand(message)
-        
-        if (voiceCommand.shouldExecute && voiceCommand.type != CommandType.NONE) {
-            // Execute command and get response
-            val commandResponse = VoiceCommandParser.executeCommand(this, voiceCommand)
-            addAssistantMessage(commandResponse)
-            
-            // Also speak it
-            enqueueSpeech(commandResponse)
+        // Safe local automation parse first (multi-task supported)
+        val parsedLocal = VoiceCommandParser.parseAutomation(message)
+        if (parsedLocal != null) {
+            handleParsedAutomation(parsedLocal)
             return
         }
         
@@ -307,16 +331,22 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     if (chatContainer.childCount > 0) {
                         chatContainer.removeViewAt(chatContainer.childCount - 1)
                     }
-                    
-                    // Add assistant response
-                    addAssistantMessage(response.text)
-                    
-                    // Speak response with selected provider
-                    enqueueSpeech(response.text)
-                    
-                    // Execute root command if present
-                    response.rootCommand?.let { command ->
-                        executeRootCommand(command)
+
+                    val parsedAssistant = VoiceCommandParser.parseAssistantJson(response.text)
+                    if (parsedAssistant != null) {
+                        handleParsedAutomation(parsedAssistant)
+                    } else {
+                        // Add assistant response
+                        addAssistantMessage(response.text)
+
+                        // Speak response with selected provider
+                        enqueueSpeech(response.text)
+                    }
+
+                    // Safety rule: ignore legacy raw root command payloads
+                    response.rootCommand?.takeIf { it.isNotBlank() }?.let { legacy ->
+                        addSystemMessage("⛔ Raw root command ignored by Safe Automation policy")
+                        AutomationAuditLogger.log(this@AssistantActivity, "root_command_ignored:${legacy.take(120)}")
                     }
                 }
             } catch (e: Exception) {
@@ -330,63 +360,53 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
     }
-    
-    private fun executeRootCommand(command: String) {
-        val policyDecision = RootSafetyPolicy.evaluate(this, command)
-        if (!policyDecision.allowed) {
-            addSystemMessage("⛔ Root blocked: ${policyDecision.reason}")
-            RootSafetyPolicy.appendAudit(this, command, "BLOCKED", policyDecision.reason)
+
+    private fun handleParsedAutomation(parsed: ParsedAutomationCommand) {
+        val ack = parsed.acknowledgement.ifBlank { "Thik ache, safe automation request receive hoyeche." }
+        val safeJson = VoiceCommandParser.toJson(parsed.envelope)
+
+        addAssistantMessage(ack)
+        enqueueSpeech(ack)
+        addSystemMessage("Safe Intent JSON: $safeJson")
+
+        val hasExecutableTask = parsed.envelope.action == "launch_multiple_apps" ||
+            !parsed.envelope.tasks.isNullOrEmpty()
+        if (!hasExecutableTask) {
+            addSystemMessage("No executable task requested. Staying on standby.")
             return
         }
 
-        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
-        val safeGuardEnabled = prefs.getBoolean("safe_root_guard", true)
-
-        if (safeGuardEnabled && isDangerousRootCommand(command)) {
-            AlertDialog.Builder(this)
-                .setTitle("⚠️ Dangerous root command")
-                .setMessage("Command:\n$command\n\nRun anyway?")
-                .setNegativeButton("Cancel") { d, _ ->
-                    d.dismiss()
-                    addSystemMessage("Blocked dangerous command")
-                    RootSafetyPolicy.appendAudit(this, command, "BLOCKED", "Dangerous command cancelled by user")
-                }
-                .setPositiveButton("Run") { _, _ ->
-                    runRootCommand(command)
-                }
-                .show()
-        } else {
-            runRootCommand(command)
+        if (VoiceCommandParser.requiresConfirmation(parsed.envelope)) {
+            pendingConfirmationEnvelope = parsed.envelope
+            val confirmPrompt = "Sensitive task detect hoyeche. Bolun 'confirm' to proceed or 'cancel'."
+            addSystemMessage(confirmPrompt)
+            enqueueSpeech("Sensitive action ache. Confirm bolle age barabo.")
+            return
         }
+
+        executeSafeIntent(parsed.envelope)
     }
 
-    private fun runRootCommand(command: String) {
+    private fun executeSafeIntent(envelope: SafeIntentEnvelope) {
         CoroutineScope(Dispatchers.IO).launch {
-            val result = rootExecutor.execute(command)
+            val result = VoiceCommandParser.executeAutomation(this@AssistantActivity, envelope)
             withContext(Dispatchers.Main) {
-                if (result.isNotEmpty()) {
-                    addSystemMessage("Command executed: $result")
+                addSystemMessage(result.summary)
+                if (result.details.isNotEmpty()) {
+                    addSystemMessage(result.details.joinToString(" | "))
                 }
-                val status = if (result.lowercase(Locale.getDefault()).contains("error")) "FAILED" else "OK"
-                RootSafetyPolicy.appendAudit(this@AssistantActivity, command, status, result.take(200))
             }
         }
     }
 
-    private fun isDangerousRootCommand(command: String): Boolean {
-        val lower = command.lowercase(Locale.getDefault())
-        val riskyPatterns = listOf(
-            "rm -rf /",
-            "mkfs",
-            "dd if=",
-            "reboot",
-            "shutdown",
-            "setenforce 0",
-            "chmod 777 /system",
-            "wipe",
-            "format"
-        )
-        return riskyPatterns.any { lower.contains(it) }
+    private fun isConfirmMessage(text: String): Boolean {
+        val keywords = listOf("confirm", "yes", "ok", "ha", "hmm yes", "proceed", "dao")
+        return keywords.any { text == it || text.startsWith("$it ") }
+    }
+
+    private fun isCancelMessage(text: String): Boolean {
+        val keywords = listOf("cancel", "no", "stop", "na", "bad dao")
+        return keywords.any { text == it || text.startsWith("$it ") }
     }
     
     private fun addUserMessage(text: String) {
