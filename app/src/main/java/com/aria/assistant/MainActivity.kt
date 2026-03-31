@@ -1,8 +1,10 @@
 package com.aria.assistant
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -22,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.*
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
@@ -36,6 +39,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var tts: TextToSpeech
     private var ttsReady = false
+    private var mediaPlayer: MediaPlayer? = null
     
     private lateinit var lettaService: LettaApiService
     private val rootExecutor = RootCommandExecutor()
@@ -153,9 +157,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             addAssistantMessage(commandResponse)
             
             // Also speak it
-            if (ttsReady) {
-                tts.speak(commandResponse, TextToSpeech.QUEUE_FLUSH, null, null)
-            }
+            speakWithVoiceProvider(commandResponse)
             return
         }
         
@@ -176,10 +178,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // Add assistant response
                     addAssistantMessage(response.text)
                     
-                    // Speak response
-                    if (ttsReady) {
-                        tts.speak(response.text, TextToSpeech.QUEUE_FLUSH, null, null)
-                    }
+                    // Speak response with selected provider
+                    speakWithVoiceProvider(response.text)
                     
                     // Execute root command if present
                     response.rootCommand?.let { command ->
@@ -278,8 +278,72 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
     
+
+
+    private fun speakWithVoiceProvider(text: String) {
+        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+        val ttsProvider = prefs.getString("tts_provider", "android") ?: "android"
+        val voiceId = prefs.getString("voice_id", "android_default") ?: "android_default"
+        val voiceApiKey = prefs.getString("voice_api_key", "") ?: ""
+
+        when (ttsProvider) {
+            "android" -> {
+                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+            "elevenlabs", "cartesia" -> {
+                if (voiceApiKey.isEmpty()) {
+                    if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                    return
+                }
+
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val provider = if (ttsProvider == "elevenlabs") TTSProvider.ELEVENLABS else TTSProvider.CARTESIA
+                        val audioFile = TTSProviders.generateSpeech(this@MainActivity, text, provider, voiceId, voiceApiKey)
+
+                        if (audioFile != null && audioFile.exists()) {
+                            withContext(Dispatchers.Main) { playAudioFile(audioFile) }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                            }
+                        }
+                    } catch (_: Exception) {
+                        withContext(Dispatchers.Main) {
+                            if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                    }
+                }
+            }
+            else -> {
+                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+        }
+    }
+
+    private fun playAudioFile(audioFile: File) {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(audioFile.absolutePath)
+                prepare()
+                start()
+                setOnCompletionListener {
+                    release()
+                    mediaPlayer = null
+                    audioFile.delete()
+                }
+            }
+        } catch (_: Exception) {
+            audioFile.delete()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        mediaPlayer?.release()
         tts.shutdown()
         speechRecognizer.destroy()
     }
