@@ -4,4 +4,5 @@ interface SetupHost {
     fun requestAllRuntimePermissions()
     fun openOverlaySettings()
     fun requestDefaultAssistant()
+    fun openDefaultAppsSettings()
 }

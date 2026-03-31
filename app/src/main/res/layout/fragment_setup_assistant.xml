@@ -40,4 +40,13 @@
         android:text="Set ARIA as Default Assistant"
         app:cornerRadius="12dp" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/openDefaultAppsButton"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="Open Default Apps Settings"
+        app:cornerRadius="12dp" />
+
 </LinearLayout>

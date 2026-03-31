@@ -21,6 +21,10 @@ class AssistantSetupFragment : Fragment(R.layout.fragment_setup_assistant) {
             (requireActivity() as? SetupHost)?.requestDefaultAssistant()
         }
 
+        view.findViewById<MaterialButton>(R.id.openDefaultAppsButton).setOnClickListener {
+            (requireActivity() as? SetupHost)?.openDefaultAppsSettings()
+        }
+
         refreshStatus()
     }
 
@@ -34,7 +38,7 @@ class AssistantSetupFragment : Fragment(R.layout.fragment_setup_assistant) {
         assistantStatusText.text = if (granted) {
             "✅ ARIA set as default assistant"
         } else {
-            "❌ ARIA not default assistant"
+            "❌ ARIA not default assistant (open fallback settings if missing)"
         }
     }
 }

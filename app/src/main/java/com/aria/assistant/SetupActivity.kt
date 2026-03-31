@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.viewpager2.widget.ViewPager2
@@ -22,6 +23,7 @@ class SetupActivity : AppCompatActivity(), SetupHost {
 
     private lateinit var tabLayout: TabLayout
     private lateinit var viewPager: ViewPager2
+    private val rootExecutor = RootCommandExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,16 +65,99 @@ class SetupActivity : AppCompatActivity(), SetupHost {
                 && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
                 && !roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
             ) {
+                val roleIntent = roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
+                if (!canHandle(roleIntent)) {
+                    Toast.makeText(this, "Assistant role screen unavailable, opening fallback", Toast.LENGTH_SHORT).show()
+                    openDefaultAppsSettings()
+                    return
+                }
                 @Suppress("DEPRECATION")
                 startActivityForResult(
-                    roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT),
+                    roleIntent,
                     REQUEST_ASSISTANT_ROLE
                 )
                 return
             }
         }
 
-        startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+        // OEM fallback chain (some devices hide Digital Assistant menu)
+        val fallbackIntents = listOf(
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        )
+
+        val opened = fallbackIntents.firstOrNull { canHandle(it) }?.let {
+            startActivity(it)
+            true
+        } ?: false
+
+        if (opened) {
+            Toast.makeText(
+                this,
+                "Set ARIA as Assist app from opened settings screen",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            Toast.makeText(this, "No compatible settings screen found. Trying root fallback...", Toast.LENGTH_LONG).show()
+            tryRootAssistantFallbackAsync()
+        }
+    }
+
+    override fun openDefaultAppsSettings() {
+        val fallbackIntents = listOf(
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        )
+
+        val opened = fallbackIntents.firstOrNull { canHandle(it) }?.let {
+            startActivity(it)
+            true
+        } ?: false
+
+        if (!opened) {
+            Toast.makeText(this, "Default apps settings unavailable. Trying root fallback...", Toast.LENGTH_LONG).show()
+            tryRootAssistantFallbackAsync()
+        }
+    }
+
+    private fun canHandle(intent: Intent): Boolean {
+        return intent.resolveActivity(packageManager) != null
+    }
+
+    private fun tryRootAssistantFallbackAsync() {
+        Thread {
+            val ok = tryRootAssistantFallback()
+            runOnUiThread {
+                if (ok) {
+                    Toast.makeText(
+                        this,
+                        "Root fallback applied. Re-open this screen to verify.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Root fallback failed. Please set manually in system settings.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun tryRootAssistantFallback(): Boolean {
+        return try {
+            if (!rootExecutor.checkRootAccess()) return false
+
+            val component = "$packageName/$packageName.AssistantActivity"
+            val result = rootExecutor.execute("settings put secure assistant $component")
+            !result.lowercase().contains("error")
+        } catch (_: Exception) {
+            false
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean {

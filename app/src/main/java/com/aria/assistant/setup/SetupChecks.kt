@@ -114,12 +114,15 @@ object SetupChecks {
     fun overlayGranted(context: Context): Boolean = Settings.canDrawOverlays(context)
 
     fun assistantGranted(context: Context): Boolean {
+        val secureAssistant = Settings.Secure.getString(context.contentResolver, "assistant")
+        val secureMatch = secureAssistant?.contains(context.packageName) == true
+
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = context.getSystemService(RoleManager::class.java)
-            roleManager?.isRoleHeld(RoleManager.ROLE_ASSISTANT) == true
+            val roleHeld = roleManager?.isRoleHeld(RoleManager.ROLE_ASSISTANT) == true
+            roleHeld || secureMatch
         } else {
-            val assistant = Settings.Secure.getString(context.contentResolver, "assistant")
-            assistant?.contains(context.packageName) == true
+            secureMatch
         }
     }
 
