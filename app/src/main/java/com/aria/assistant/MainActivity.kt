@@ -175,7 +175,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             return
                         }
                         finalText = rawText
-                            .replace(Regex("(?i)^\s*(hey|hi)?\s*aria[,! ]*"), "")
+                            .replace(Regex("(?i)^\\s*(hey|hi)?\\s*aria[,! ]*"), "")
                             .trim()
                         if (finalText.isBlank()) {
                             Toast.makeText(this@MainActivity, "Bolo: Hey ARIA, then command", Toast.LENGTH_SHORT).show()
