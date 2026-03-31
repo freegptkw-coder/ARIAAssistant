@@ -29,17 +29,13 @@ object TTSProviders {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
     
-    // ElevenLabs popular voices
+    // ElevenLabs FREE tier voices (tested & working)
     val elevenLabsVoices = listOf(
-        VoiceOption("21m00Tcm4TlvDq8ikWAM", "Rachel", TTSProvider.ELEVENLABS, "American Female - Calm"),
-        VoiceOption("AZnzlk1XvdvUeBnXmlld", "Domi", TTSProvider.ELEVENLABS, "American Female - Strong"),
-        VoiceOption("EXAVITQu4vr4xnSDxMaL", "Bella", TTSProvider.ELEVENLABS, "American Female - Soft"),
-        VoiceOption("ErXwobaYiN019PkySvjV", "Antoni", TTSProvider.ELEVENLABS, "American Male - Young"),
-        VoiceOption("MF3mGyEYCl7XYWbV9V6O", "Elli", TTSProvider.ELEVENLABS, "American Female - Emotional"),
-        VoiceOption("TxGEqnHWrfWFTfGW9XjX", "Josh", TTSProvider.ELEVENLABS, "American Male - Deep"),
-        VoiceOption("VR6AewLTigWG4xSOukaG", "Arnold", TTSProvider.ELEVENLABS, "American Male - Strong"),
-        VoiceOption("pNInz6obpgDQGcFmaJgB", "Adam", TTSProvider.ELEVENLABS, "American Male - Clear"),
-        VoiceOption("yoZ06aMxZJJ28mfd3POQ", "Sam", TTSProvider.ELEVENLABS, "American Male - Raspy")
+        VoiceOption("EXAVITQu4vr4xnSDxMaL", "Bella", TTSProvider.ELEVENLABS, "American Female - Soft ✅ FREE"),
+        VoiceOption("pNInz6obpgDQGcFmaJgB", "Adam", TTSProvider.ELEVENLABS, "American Male - Clear ✅ FREE"),
+        VoiceOption("ErXwobaYiN019PkySvjV", "Antoni", TTSProvider.ELEVENLABS, "American Male - Young ✅ FREE"),
+        VoiceOption("AZnzlk1XvdvUeBnXmlld", "Domi", TTSProvider.ELEVENLABS, "American Female - Strong ✅ FREE"),
+        VoiceOption("MF3mGyEYCl7XYWbV9V6O", "Elli", TTSProvider.ELEVENLABS, "American Female - Emotional ✅ FREE")
     )
     
     // Cartesia voices
