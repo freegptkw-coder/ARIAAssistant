@@ -24,6 +24,40 @@
         android:textColor="#AAB2C0"
         android:textSize="13sp" />
 
+    <com.google.android.material.card.MaterialCardView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        app:cardBackgroundColor="#1B1F2A"
+        app:cardCornerRadius="12dp"
+        app:strokeColor="#2B3244"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <TextView
+                android:id="@+id/permissionExplainTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Permission details"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/permissionExplainBody"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Tap a permission below to see why ARIA needs it."
+                android:textColor="#AAB2C0"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/permissionsRecycler"
         android:layout_width="match_parent"
@@ -32,9 +66,18 @@
         android:layout_marginTop="12dp" />
 
     <com.google.android.material.button.MaterialButton
+        android:id="@+id/grantMissingPermissionsButton"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Grant Missing Only"
+        app:cornerRadius="12dp" />
+
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/grantAllPermissionsButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:text="Grant All App Permissions"
         app:cornerRadius="12dp" />
 

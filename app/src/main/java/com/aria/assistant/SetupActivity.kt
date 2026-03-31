@@ -1,6 +1,7 @@
 package com.aria.assistant
 
 import android.app.role.RoleManager
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -13,6 +14,7 @@ import androidx.viewpager2.widget.ViewPager2
 import com.aria.assistant.setup.SetupChecks
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import java.util.Locale
 
 class SetupActivity : AppCompatActivity(), SetupHost {
 
@@ -35,6 +37,10 @@ class SetupActivity : AppCompatActivity(), SetupHost {
         tabLayout = findViewById(R.id.setupTabLayout)
         viewPager = findViewById(R.id.setupViewPager)
         viewPager.adapter = SetupPagerAdapter(this)
+        viewPager.setPageTransformer { page, position ->
+            page.alpha = 0.7f + (1f - kotlin.math.abs(position)) * 0.3f
+            page.translationX = -position * 30f
+        }
 
         val tabTitles = listOf("Permissions", "Overlay", "Assistant")
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
@@ -48,6 +54,16 @@ class SetupActivity : AppCompatActivity(), SetupHost {
             SetupChecks.runtimeRequestablePermissions(),
             REQUEST_RUNTIME_PERMISSIONS
         )
+    }
+
+    override fun requestMissingRuntimePermissions() {
+        val missing = SetupChecks.missingRuntimeRequestablePermissions(this)
+        if (missing.isEmpty()) {
+            Toast.makeText(this, "All runtime permissions already granted", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        ActivityCompat.requestPermissions(this, missing, REQUEST_RUNTIME_PERMISSIONS)
     }
 
     override fun openOverlaySettings() {
@@ -66,83 +82,56 @@ class SetupActivity : AppCompatActivity(), SetupHost {
                 && !roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
             ) {
                 val roleIntent = roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
-                if (!canHandle(roleIntent)) {
-                    Toast.makeText(this, "Assistant role screen unavailable, opening fallback", Toast.LENGTH_SHORT).show()
-                    openDefaultAppsSettings()
+                if (canHandle(roleIntent)) {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(roleIntent, REQUEST_ASSISTANT_ROLE)
                     return
                 }
-                @Suppress("DEPRECATION")
-                startActivityForResult(
-                    roleIntent,
-                    REQUEST_ASSISTANT_ROLE
-                )
-                return
             }
         }
 
-        // OEM fallback chain (some devices hide Digital Assistant menu)
-        val fallbackIntents = listOf(
-            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
-            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
-        )
+        openDefaultAppsSettings()
+    }
 
-        val opened = fallbackIntents.firstOrNull { canHandle(it) }?.let {
+    override fun openDefaultAppsSettings() {
+        val intents = mutableListOf<Intent>()
+
+        intents += brandSpecificAssistantIntents()
+        intents += Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
+        intents += Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
+        intents += Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+
+        val opened = intents.firstOrNull { canHandle(it) }?.let {
             startActivity(it)
             true
         } ?: false
 
         if (opened) {
-            Toast.makeText(
-                this,
-                "Set ARIA as Assist app from opened settings screen",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(this, "Set ARIA as Assist app from opened settings", Toast.LENGTH_LONG).show()
         } else {
-            Toast.makeText(this, "No compatible settings screen found. Trying root fallback...", Toast.LENGTH_LONG).show()
-            tryRootAssistantFallbackAsync()
+            Toast.makeText(this, "No assistant settings page found, trying root fallback", Toast.LENGTH_LONG).show()
+            forceSetAssistantWithRoot()
         }
     }
 
-    override fun openDefaultAppsSettings() {
-        val fallbackIntents = listOf(
-            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
-            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
-            Intent(Settings.ACTION_APPLICATION_SETTINGS),
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
-        )
-
-        val opened = fallbackIntents.firstOrNull { canHandle(it) }?.let {
-            startActivity(it)
-            true
-        } ?: false
-
-        if (!opened) {
-            Toast.makeText(this, "Default apps settings unavailable. Trying root fallback...", Toast.LENGTH_LONG).show()
-            tryRootAssistantFallbackAsync()
+    override fun getAssistantFallbackHint(): String {
+        return when (Build.MANUFACTURER.lowercase(Locale.getDefault())) {
+            "xiaomi", "redmi", "poco" -> "MIUI: Settings > Apps > Manage apps > Default apps > Assist & voice input"
+            "samsung" -> "Samsung: Settings > Apps > Choose default apps > Digital assistant app"
+            "oppo", "realme", "oneplus" -> "ColorOS/RealmeUI: Settings > Apps > Default apps > Assist app"
+            "vivo" -> "Funtouch: Settings > Apps > Default apps > Assist app"
+            else -> "Android: Settings > Apps > Default apps > Digital assistant app"
         }
     }
 
-    private fun canHandle(intent: Intent): Boolean {
-        return intent.resolveActivity(packageManager) != null
-    }
-
-    private fun tryRootAssistantFallbackAsync() {
+    override fun forceSetAssistantWithRoot() {
         Thread {
             val ok = tryRootAssistantFallback()
             runOnUiThread {
                 if (ok) {
-                    Toast.makeText(
-                        this,
-                        "Root fallback applied. Re-open this screen to verify.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Root fallback applied. Re-open Assistant tab to verify.", Toast.LENGTH_LONG).show()
                 } else {
-                    Toast.makeText(
-                        this,
-                        "Root fallback failed. Please set manually in system settings.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Root fallback failed. Set manually from system settings.", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -151,13 +140,42 @@ class SetupActivity : AppCompatActivity(), SetupHost {
     private fun tryRootAssistantFallback(): Boolean {
         return try {
             if (!rootExecutor.checkRootAccess()) return false
-
-            val component = "$packageName/$packageName.AssistantActivity"
-            val result = rootExecutor.execute("settings put secure assistant $component")
-            !result.lowercase().contains("error")
+            val component = "$packageName/.AssistantActivity"
+            val result = rootExecutor.execute("settings put secure assistant '$component'")
+            !result.lowercase(Locale.getDefault()).contains("error")
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun brandSpecificAssistantIntents(): List<Intent> {
+        val manufacturer = Build.MANUFACTURER.lowercase(Locale.getDefault())
+        val list = mutableListOf<Intent>()
+
+        when (manufacturer) {
+            "xiaomi", "redmi", "poco" -> {
+                list += Intent().apply {
+                    component = ComponentName("com.android.settings", "com.android.settings.SubSettings")
+                    putExtra(":settings:show_fragment", "com.android.settings.applications.defaultapps.DefaultAppsSettings")
+                }
+            }
+
+            "samsung" -> {
+                list += Intent().apply {
+                    component = ComponentName("com.android.settings", "com.android.settings.Settings\$ManageApplicationsActivity")
+                }
+            }
+
+            "oppo", "realme", "oneplus", "vivo" -> {
+                list += Intent(Settings.ACTION_APPLICATION_SETTINGS)
+            }
+        }
+
+        return list
+    }
+
+    private fun canHandle(intent: Intent): Boolean {
+        return intent.resolveActivity(packageManager) != null
     }
 
     override fun onSupportNavigateUp(): Boolean {

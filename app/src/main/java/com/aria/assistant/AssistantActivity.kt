@@ -63,6 +63,8 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val rootExecutor = RootCommandExecutor()
     
     private val RECORD_AUDIO_PERMISSION = 100
+    private var recognitionRetryCount = 0
+    private val maxRecognitionRetry = 2
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -144,6 +146,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 voiceButton.text = "🔴"
+                setVoiceStatus("🎧 Listening...")
             }
             
             override fun onBeginningOfSpeech() {}
@@ -155,11 +158,29 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             override fun onError(error: Int) {
                 voiceButton.text = "🎤"
-                Toast.makeText(this@AssistantActivity, "Voice recognition error", Toast.LENGTH_SHORT).show()
+                val reason = speechErrorReason(error)
+                setVoiceStatus("⚠️ Mic error $error: $reason")
+                Toast.makeText(this@AssistantActivity, "Voice error $error: $reason", Toast.LENGTH_SHORT).show()
+
+                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    checkPermissions()
+                    return
+                }
+
+                if (shouldRetryRecognition(error) && recognitionRetryCount < maxRecognitionRetry) {
+                    recognitionRetryCount++
+                    recreateSpeechRecognizer()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startVoiceRecognition()
+                    }, 650)
+                } else {
+                    recognitionRetryCount = 0
+                }
             }
             
             override fun onResults(results: Bundle?) {
                 voiceButton.text = "🎤"
+                recognitionRetryCount = 0
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (matches != null && matches.isNotEmpty()) {
                     val rawText = matches[0]
@@ -194,12 +215,66 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     private fun startVoiceRecognition() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            checkPermissions()
+            return
+        }
+
+        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+        val selectedLang = prefs.getString("speech_recognition_lang", "auto") ?: "auto"
+        val languageCode = when (selectedLang) {
+            "bn-BD" -> "bn-BD"
+            "en-US" -> "en-US"
+            else -> Locale.getDefault().toLanguageTag()
+        }
+
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageCode)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now...")
         }
-        speechRecognizer.startListening(intent)
+
+        try {
+            speechRecognizer.startListening(intent)
+        } catch (_: Exception) {
+            recreateSpeechRecognizer()
+            Toast.makeText(this, "Mic service restarted, try again", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun shouldRetryRecognition(error: Int): Boolean {
+        return error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
+            error == SpeechRecognizer.ERROR_NETWORK ||
+            error == SpeechRecognizer.ERROR_SERVER ||
+            error == SpeechRecognizer.ERROR_CLIENT ||
+            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+    }
+
+    private fun speechErrorReason(error: Int): String {
+        return when (error) {
+            SpeechRecognizer.ERROR_AUDIO -> "audio input problem"
+            SpeechRecognizer.ERROR_CLIENT -> "client busy"
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permission missing"
+            SpeechRecognizer.ERROR_NETWORK -> "network issue"
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "network timeout"
+            SpeechRecognizer.ERROR_NO_MATCH -> "could not understand"
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "recognizer busy"
+            SpeechRecognizer.ERROR_SERVER -> "server error"
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "no speech detected"
+            else -> "unknown"
+        }
+    }
+
+    private fun recreateSpeechRecognizer() {
+        try {
+            speechRecognizer.destroy()
+        } catch (_: Exception) {
+        }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        setupSpeechRecognizer()
     }
     
     private fun sendMessage(message: String) {
@@ -257,6 +332,13 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     private fun executeRootCommand(command: String) {
+        val policyDecision = RootSafetyPolicy.evaluate(this, command)
+        if (!policyDecision.allowed) {
+            addSystemMessage("⛔ Root blocked: ${policyDecision.reason}")
+            RootSafetyPolicy.appendAudit(this, command, "BLOCKED", policyDecision.reason)
+            return
+        }
+
         val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
         val safeGuardEnabled = prefs.getBoolean("safe_root_guard", true)
 
@@ -267,6 +349,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 .setNegativeButton("Cancel") { d, _ ->
                     d.dismiss()
                     addSystemMessage("Blocked dangerous command")
+                    RootSafetyPolicy.appendAudit(this, command, "BLOCKED", "Dangerous command cancelled by user")
                 }
                 .setPositiveButton("Run") { _, _ ->
                     runRootCommand(command)
@@ -284,6 +367,8 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (result.isNotEmpty()) {
                     addSystemMessage("Command executed: $result")
                 }
+                val status = if (result.lowercase(Locale.getDefault()).contains("error")) "FAILED" else "OK"
+                RootSafetyPolicy.appendAudit(this@AssistantActivity, command, status, result.take(200))
             }
         }
     }
@@ -448,24 +533,16 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             "elevenlabs", "cartesia" -> {
                 if (voiceApiKey.isEmpty()) {
-                    setVoiceStatus("⚠️ Voice key missing, fallback")
-                    if (ttsReady) {
-                        val utteranceId = "aria_${System.currentTimeMillis()}"
-                        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-                    } else {
-                        onSpeechFinished()
-                    }
+                    setVoiceStatus("⚠️ Voice key missing: invalid_key")
+                    addSystemMessage("TTS fallback reason: invalid_key")
+                    fallbackToAndroidTts(text)
                     return
                 }
 
                 if (ttsProvider == "elevenlabs" && !canUseElevenLabs(text.length)) {
-                    setVoiceStatus("⚠️ ElevenLabs limit near, Android fallback")
-                    if (ttsReady) {
-                        val utteranceId = "aria_${System.currentTimeMillis()}"
-                        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-                    } else {
-                        onSpeechFinished()
-                    }
+                    setVoiceStatus("⚠️ ElevenLabs limit reached: quota_exceeded")
+                    addSystemMessage("TTS fallback reason: quota_exceeded")
+                    fallbackToAndroidTts(text)
                     return
                 }
 
@@ -483,30 +560,44 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
                         if (audioFile != null && audioFile.exists()) {
                             if (ttsProvider == "elevenlabs") addElevenLabsUsage(text.length)
+                            prefs.edit()
+                                .putString("last_good_voice_provider", ttsProvider)
+                                .putString("last_good_voice_id", voiceId)
+                                .apply()
                             withContext(Dispatchers.Main) {
                                 setVoiceStatus("🔊 Playing premium voice...")
                                 playAudioFile(audioFile, text)
                             }
                         } else {
+                            val reason = TTSProviders.getLastErrorReason().ifBlank { "unknown_error" }
+                            val fallbackVoiceProvider = prefs.getString("last_good_voice_provider", "") ?: ""
+                            val fallbackVoiceId = prefs.getString("last_good_voice_id", "") ?: ""
+
+                            val recoveredFile = if (
+                                fallbackVoiceProvider == ttsProvider &&
+                                fallbackVoiceId.isNotBlank() &&
+                                fallbackVoiceId != voiceId
+                            ) {
+                                TTSProviders.generateSpeech(this@AssistantActivity, text, provider, fallbackVoiceId, voiceApiKey)
+                            } else {
+                                null
+                            }
+
                             withContext(Dispatchers.Main) {
-                                setVoiceStatus("⚠️ Premium failed, Android fallback")
-                                if (ttsReady) {
-                                    val utteranceId = "aria_${System.currentTimeMillis()}"
-                                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                                if (recoveredFile != null && recoveredFile.exists()) {
+                                    setVoiceStatus("✅ Recovered using last stable voice")
+                                    playAudioFile(recoveredFile, text)
                                 } else {
-                                    onSpeechFinished()
+                                    setVoiceStatus("⚠️ Premium failed: $reason")
+                                    addSystemMessage("TTS fallback reason: $reason")
+                                    fallbackToAndroidTts(text)
                                 }
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
-                            setVoiceStatus("⚠️ Voice error, Android fallback")
-                            if (ttsReady) {
-                                val utteranceId = "aria_${System.currentTimeMillis()}"
-                                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-                            } else {
-                                onSpeechFinished()
-                            }
+                            setVoiceStatus("⚠️ Voice error: ${e.message ?: "unknown"}")
+                            fallbackToAndroidTts(text)
                         }
                     }
                 }
@@ -520,6 +611,15 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     onSpeechFinished()
                 }
             }
+        }
+    }
+
+    private fun fallbackToAndroidTts(text: String) {
+        if (ttsReady) {
+            val utteranceId = "aria_${System.currentTimeMillis()}"
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        } else {
+            onSpeechFinished()
         }
     }
 

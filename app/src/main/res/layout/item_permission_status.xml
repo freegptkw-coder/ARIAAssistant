@@ -4,7 +4,8 @@
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingVertical="10dp">
+    android:paddingVertical="10dp"
+    android:paddingHorizontal="4dp">
 
     <TextView
         android:id="@+id/permissionStatusIcon"
@@ -13,13 +14,39 @@
         android:text="❌"
         android:textSize="17sp" />
 
-    <TextView
-        android:id="@+id/permissionTitle"
+    <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:text="Permission"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/permissionTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Permission"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/permissionSubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Reason"
+            android:textColor="#AAB2C0"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/permissionChip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="BLOCKER"
         android:textColor="#FFFFFF"
-        android:textSize="15sp" />
+        android:textSize="10sp" />
 
 </LinearLayout>

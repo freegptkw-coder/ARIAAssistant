@@ -8,10 +8,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.concurrent.TimeUnit
-import org.json.JSONObject
 
 enum class TTSProvider {
     ANDROID, ELEVENLABS, CARTESIA
@@ -24,14 +25,27 @@ data class VoiceOption(
     val description: String = ""
 )
 
+data class VoiceValidationResult(
+    val success: Boolean,
+    val reason: String
+)
+
 object TTSProviders {
-    
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
-    
-    // ElevenLabs FREE tier voices (tested & working)
+
+    @Volatile
+    private var lastErrorReason: String = ""
+
+    fun getLastErrorReason(): String = lastErrorReason
+
+    private fun setLastError(reason: String) {
+        lastErrorReason = reason
+    }
+
     val elevenLabsVoices = listOf(
         VoiceOption("EXAVITQu4vr4xnSDxMaL", "Bella", TTSProvider.ELEVENLABS, "American Female - Soft ✅ FREE"),
         VoiceOption("pNInz6obpgDQGcFmaJgB", "Adam", TTSProvider.ELEVENLABS, "American Male - Clear ✅ FREE"),
@@ -39,8 +53,7 @@ object TTSProviders {
         VoiceOption("AZnzlk1XvdvUeBnXmlld", "Domi", TTSProvider.ELEVENLABS, "American Female - Strong ✅ FREE"),
         VoiceOption("MF3mGyEYCl7XYWbV9V6O", "Elli", TTSProvider.ELEVENLABS, "American Female - Emotional ✅ FREE")
     )
-    
-    // Cartesia voices
+
     val cartesiaVoices = listOf(
         VoiceOption("a0e99841-438c-4a64-b679-ae501e7d6091", "Barbershop Man", TTSProvider.CARTESIA, "Male - Friendly"),
         VoiceOption("79a125e8-cd45-4c13-8a67-188112f4dd22", "British Lady", TTSProvider.CARTESIA, "Female - British"),
@@ -51,15 +64,42 @@ object TTSProviders {
         VoiceOption("638efaaa-4d0c-442e-b701-3fae16aad012", "Calm Lady", TTSProvider.CARTESIA, "Female - Calm & Soothing"),
         VoiceOption("41534e16-2966-4c6b-9670-111411def906", "Kentucky Man", TTSProvider.CARTESIA, "Male - Southern")
     )
-    
+
     val androidVoices = listOf(
         VoiceOption("android_default", "Android Default", TTSProvider.ANDROID, "System TTS")
     )
-    
+
     fun getAllVoices(): List<VoiceOption> {
         return androidVoices + elevenLabsVoices + cartesiaVoices
     }
-    
+
+    suspend fun validateVoiceConfig(
+        context: Context,
+        provider: TTSProvider,
+        voiceId: String,
+        apiKey: String
+    ): VoiceValidationResult {
+        return withContext(Dispatchers.IO) {
+            if (apiKey.isBlank()) return@withContext VoiceValidationResult(false, "invalid_key")
+            if (provider == TTSProvider.ANDROID) return@withContext VoiceValidationResult(true, "android_ok")
+
+            val testText = "Hello from ARIA"
+            val file = try {
+                generateSpeech(context, testText, provider, voiceId, apiKey)
+            } catch (_: Exception) {
+                null
+            }
+
+            if (file != null && file.exists() && file.length() > 0) {
+                file.delete()
+                return@withContext VoiceValidationResult(true, "ok")
+            }
+
+            val reason = getLastErrorReason().ifBlank { "unknown_error" }
+            VoiceValidationResult(false, reason)
+        }
+    }
+
     suspend fun generateSpeech(
         context: Context,
         text: String,
@@ -69,21 +109,22 @@ object TTSProviders {
     ): File? {
         return withContext(Dispatchers.IO) {
             try {
+                setLastError("")
                 when (provider) {
                     TTSProvider.ELEVENLABS -> generateElevenLabs(context, text, voiceId, apiKey)
                     TTSProvider.CARTESIA -> generateCartesia(context, text, voiceId, apiKey)
-                    TTSProvider.ANDROID -> null // Handled by Android TTS
+                    TTSProvider.ANDROID -> null
                 }
             } catch (e: Exception) {
+                setLastError("exception:${e.message ?: "unknown"}")
                 null
             }
         }
     }
-    
+
     private fun generateElevenLabs(context: Context, text: String, voiceId: String, apiKey: String): File? {
         val payload = JSONObject().apply {
             put("text", text)
-            // More compatible for free/basic plans
             put("model_id", "eleven_multilingual_v2")
             put("voice_settings", JSONObject().apply {
                 put("stability", 0.5)
@@ -94,7 +135,7 @@ object TTSProviders {
         }
 
         val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
-        
+
         val request = Request.Builder()
             .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId")
             .post(requestBody)
@@ -102,23 +143,28 @@ object TTSProviders {
             .addHeader("Content-Type", "application/json")
             .addHeader("xi-api-key", apiKey)
             .build()
-        
-        val response = client.newCall(request).execute()
-        
-        if (response.isSuccessful) {
-            val audioBytes = response.body?.bytes() ?: return null
-            
-            val outputFile = File(context.cacheDir, "tts_elevenlabs_${System.currentTimeMillis()}.mp3")
-            FileOutputStream(outputFile).use { it.write(audioBytes) }
-            
-            return outputFile
-        }
 
-        Log.e("TTSProviders", "ElevenLabs TTS failed: code=${response.code}, body=${response.body?.string()}")
-        
-        return null
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val audioBytes = response.body?.bytes() ?: run {
+                    setLastError("empty_audio")
+                    return null
+                }
+
+                val outputFile = File(context.cacheDir, "tts_elevenlabs_${System.currentTimeMillis()}.mp3")
+                FileOutputStream(outputFile).use { it.write(audioBytes) }
+                setLastError("")
+                return outputFile
+            }
+
+            val body = response.body?.string().orEmpty()
+            val reason = mapTtsError("elevenlabs", response.code, body)
+            setLastError(reason)
+            Log.e("TTSProviders", "ElevenLabs failed code=${response.code}, reason=$reason, body=$body")
+            return null
+        }
     }
-    
+
     private fun generateCartesia(context: Context, text: String, voiceId: String, apiKey: String): File? {
         val payload = JSONObject().apply {
             put("model_id", "sonic-english")
@@ -135,7 +181,7 @@ object TTSProviders {
         }
 
         val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
-        
+
         val request = Request.Builder()
             .url("https://api.cartesia.ai/tts/bytes")
             .post(requestBody)
@@ -143,18 +189,37 @@ object TTSProviders {
             .addHeader("Cartesia-Version", "2024-06-10")
             .addHeader("Content-Type", "application/json")
             .build()
-        
-        val response = client.newCall(request).execute()
-        
-        if (response.isSuccessful) {
-            val audioBytes = response.body?.bytes() ?: return null
-            
-            val outputFile = File(context.cacheDir, "tts_cartesia_${System.currentTimeMillis()}.mp3")
-            FileOutputStream(outputFile).use { it.write(audioBytes) }
-            
-            return outputFile
+
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val audioBytes = response.body?.bytes() ?: run {
+                    setLastError("empty_audio")
+                    return null
+                }
+
+                val outputFile = File(context.cacheDir, "tts_cartesia_${System.currentTimeMillis()}.mp3")
+                FileOutputStream(outputFile).use { it.write(audioBytes) }
+                setLastError("")
+                return outputFile
+            }
+
+            val body = response.body?.string().orEmpty()
+            val reason = mapTtsError("cartesia", response.code, body)
+            setLastError(reason)
+            Log.e("TTSProviders", "Cartesia failed code=${response.code}, reason=$reason, body=$body")
+            return null
         }
-        
-        return null
+    }
+
+    private fun mapTtsError(provider: String, code: Int, body: String): String {
+        val lower = body.lowercase(Locale.getDefault())
+        return when {
+            code == 401 || lower.contains("invalid api key") || lower.contains("unauthorized") -> "invalid_key"
+            code == 404 || lower.contains("voice_not_found") || lower.contains("voice not found") -> "voice_not_found"
+            code == 429 || lower.contains("quota") || lower.contains("rate limit") -> "quota_exceeded"
+            lower.contains("paid_plan_required") -> "paid_plan_required"
+            code in 500..599 -> "server_error"
+            else -> "${provider}_http_$code"
+        }
     }
 }

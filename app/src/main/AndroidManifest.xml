@@ -76,6 +76,11 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:parentActivityName=".AssistantActivity"/>
+
+        <activity
+            android:name=".RootSafetyActivity"
+            android:exported="false"
+            android:parentActivityName=".SettingsActivity" />
         
         <service
             android:name=".ProactiveService"

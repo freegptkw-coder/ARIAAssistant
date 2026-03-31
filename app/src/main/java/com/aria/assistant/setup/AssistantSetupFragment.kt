@@ -11,18 +11,31 @@ import com.google.android.material.button.MaterialButton
 class AssistantSetupFragment : Fragment(R.layout.fragment_setup_assistant) {
 
     private lateinit var assistantStatusText: TextView
+    private lateinit var fallbackHintText: TextView
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
         assistantStatusText = view.findViewById(R.id.assistantStatusText)
+        fallbackHintText = view.findViewById(R.id.assistantFallbackHint)
+
+        val host = requireActivity() as? SetupHost
+        fallbackHintText.text = host?.getAssistantFallbackHint() ?: "Open default apps settings and choose ARIA."
 
         view.findViewById<MaterialButton>(R.id.setAssistantButton).setOnClickListener {
-            (requireActivity() as? SetupHost)?.requestDefaultAssistant()
+            host?.requestDefaultAssistant()
         }
 
         view.findViewById<MaterialButton>(R.id.openDefaultAppsButton).setOnClickListener {
-            (requireActivity() as? SetupHost)?.openDefaultAppsSettings()
+            host?.openDefaultAppsSettings()
+        }
+
+        view.findViewById<MaterialButton>(R.id.forceRootAssistantButton).setOnClickListener {
+            host?.forceSetAssistantWithRoot()
+        }
+
+        view.findViewById<MaterialButton>(R.id.verifyAssistantButton).setOnClickListener {
+            refreshStatus()
         }
 
         refreshStatus()
@@ -38,7 +51,7 @@ class AssistantSetupFragment : Fragment(R.layout.fragment_setup_assistant) {
         assistantStatusText.text = if (granted) {
             "✅ ARIA set as default assistant"
         } else {
-            "❌ ARIA not default assistant (open fallback settings if missing)"
+            "❌ ARIA not default assistant"
         }
     }
 }

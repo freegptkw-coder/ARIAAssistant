@@ -152,7 +152,7 @@
             android:hint="🔑 Voice API Key (ElevenLabs/Cartesia)"
             app:boxBackgroundColor="#2D2D2D"
             app:endIconMode="password_toggle"
-            android:layout_marginBottom="24dp">
+            android:layout_marginBottom="12dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/voiceApiKeyInput"
                 android:layout_width="match_parent"
@@ -160,6 +160,31 @@
                 android:inputType="textPassword"
                 android:textColor="#FFFFFF"/>
         </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/voiceTestButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
+            android:text="Test Voice Key + Voice ID" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🎧 Speech Recognition"
+            android:textColor="#26C6DA"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="12dp"/>
+
+        <Spinner
+            android:id="@+id/speechLanguageSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="#2D2D2D"
+            android:padding="16dp"
+            android:layout_marginBottom="24dp"/>
 
         <TextView
             android:layout_width="match_parent"
@@ -265,7 +290,7 @@
             android:gravity="center_vertical"
             android:background="#2D2D2D"
             android:padding="16dp"
-            android:layout_marginBottom="24dp">
+            android:layout_marginBottom="12dp">
             <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -280,6 +305,13 @@
                 android:checked="true"/>
         </LinearLayout>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/rootSafetyCenterButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:text="Open Root Safety Center" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/saveButton"

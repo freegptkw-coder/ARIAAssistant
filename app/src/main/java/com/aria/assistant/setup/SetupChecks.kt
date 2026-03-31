@@ -22,37 +22,18 @@ data class SetupState(
 data class PermissionEntry(
     val title: String,
     val permission: String,
-    val isSpecial: Boolean = false
+    val description: String,
+    val isSpecial: Boolean = false,
+    val isBlocker: Boolean = false
 )
 
 object SetupChecks {
 
     private const val OVERLAY_PERMISSION_KEY = "android.permission.SYSTEM_ALERT_WINDOW"
 
-    private fun runtimeCorePermissions(): List<String> {
-        val base = mutableListOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.READ_SMS,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.CAMERA,
-            Manifest.permission.VIBRATE
-        )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            base += Manifest.permission.POST_NOTIFICATIONS
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            base += Manifest.permission.BLUETOOTH_CONNECT
-            base += Manifest.permission.BLUETOOTH_SCAN
-        }
-
-        return base
-    }
+    private fun runtimeCorePermissions(): List<String> = permissionEntriesForUi()
+        .filter { !it.isSpecial }
+        .map { it.permission }
 
     fun runtimeRequestablePermissions(): Array<String> {
         val list = mutableListOf(
@@ -78,36 +59,107 @@ object SetupChecks {
         return list.toTypedArray()
     }
 
+    fun missingRuntimeRequestablePermissions(context: Context): Array<String> {
+        return runtimeRequestablePermissions().filterNot {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+    }
+
     fun permissionEntriesForUi(): List<PermissionEntry> {
         val entries = mutableListOf(
-            PermissionEntry("Microphone", Manifest.permission.RECORD_AUDIO),
-            PermissionEntry("Contacts", Manifest.permission.READ_CONTACTS),
-            PermissionEntry("Phone Call", Manifest.permission.CALL_PHONE),
-            PermissionEntry("Send SMS", Manifest.permission.SEND_SMS),
-            PermissionEntry("Read SMS", Manifest.permission.READ_SMS),
-            PermissionEntry("Precise Location", Manifest.permission.ACCESS_FINE_LOCATION),
-            PermissionEntry("Approximate Location", Manifest.permission.ACCESS_COARSE_LOCATION),
-            PermissionEntry("Camera", Manifest.permission.CAMERA),
-            PermissionEntry("Vibrate", Manifest.permission.VIBRATE)
+            PermissionEntry(
+                title = "Microphone",
+                permission = Manifest.permission.RECORD_AUDIO,
+                description = "Required for voice wake word and speech commands.",
+                isBlocker = true
+            ),
+            PermissionEntry(
+                title = "Contacts",
+                permission = Manifest.permission.READ_CONTACTS,
+                description = "Allows ARIA to find and call saved contacts.",
+                isBlocker = false
+            ),
+            PermissionEntry(
+                title = "Phone Call",
+                permission = Manifest.permission.CALL_PHONE,
+                description = "Required to place direct calls from voice commands.",
+                isBlocker = true
+            ),
+            PermissionEntry(
+                title = "Send SMS",
+                permission = Manifest.permission.SEND_SMS,
+                description = "Allows sending text messages via ARIA.",
+                isBlocker = true
+            ),
+            PermissionEntry(
+                title = "Read SMS",
+                permission = Manifest.permission.READ_SMS,
+                description = "Needed to read incoming messages on request.",
+                isBlocker = false
+            ),
+            PermissionEntry(
+                title = "Precise Location",
+                permission = Manifest.permission.ACCESS_FINE_LOCATION,
+                description = "Used for accurate location-based automations.",
+                isBlocker = false
+            ),
+            PermissionEntry(
+                title = "Approximate Location",
+                permission = Manifest.permission.ACCESS_COARSE_LOCATION,
+                description = "Used when fine GPS is unavailable.",
+                isBlocker = false
+            ),
+            PermissionEntry(
+                title = "Camera",
+                permission = Manifest.permission.CAMERA,
+                description = "Required for camera-trigger commands.",
+                isBlocker = false
+            ),
+            PermissionEntry(
+                title = "Vibrate",
+                permission = Manifest.permission.VIBRATE,
+                description = "Allows haptic feedback for assistant events.",
+                isBlocker = false
+            )
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            entries += PermissionEntry("Notifications", Manifest.permission.POST_NOTIFICATIONS)
+            entries += PermissionEntry(
+                title = "Notifications",
+                permission = Manifest.permission.POST_NOTIFICATIONS,
+                description = "Allows proactive alerts and reminders.",
+                isBlocker = false
+            )
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            entries += PermissionEntry("Bluetooth Connect", Manifest.permission.BLUETOOTH_CONNECT)
-            entries += PermissionEntry("Bluetooth Scan", Manifest.permission.BLUETOOTH_SCAN)
+            entries += PermissionEntry(
+                title = "Bluetooth Connect",
+                permission = Manifest.permission.BLUETOOTH_CONNECT,
+                description = "Required to control paired bluetooth devices.",
+                isBlocker = false
+            )
+            entries += PermissionEntry(
+                title = "Bluetooth Scan",
+                permission = Manifest.permission.BLUETOOTH_SCAN,
+                description = "Required to discover nearby bluetooth devices.",
+                isBlocker = false
+            )
         }
 
-        entries += PermissionEntry("Display Over Apps", OVERLAY_PERMISSION_KEY, isSpecial = true)
+        entries += PermissionEntry(
+            title = "Display Over Apps",
+            permission = OVERLAY_PERMISSION_KEY,
+            description = "Special permission for floating ARIA controls.",
+            isSpecial = true,
+            isBlocker = true
+        )
 
         return entries
     }
 
     fun isPermissionGranted(context: Context, permission: String): Boolean {
         if (permission == OVERLAY_PERMISSION_KEY) return Settings.canDrawOverlays(context)
-
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 

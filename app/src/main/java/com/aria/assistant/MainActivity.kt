@@ -2,6 +2,7 @@ package com.aria.assistant
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.animation.OvershootInterpolator
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.aria.assistant.setup.SetupChecks
@@ -52,7 +53,7 @@ class MainActivity : AppCompatActivity() {
         val state = SetupChecks.evaluate(this)
 
         setupProgress.max = state.totalPermissions
-        setupProgress.progress = state.grantedPermissions
+        setupProgress.setProgressCompat(state.grantedPermissions, true)
         setupProgressText.text = "${state.grantedPermissions}/${state.totalPermissions} permissions"
 
         permissionsStatus.text = if (state.permissionsDone) "✅ Completed" else "❌ Pending"
@@ -61,5 +62,16 @@ class MainActivity : AppCompatActivity() {
 
         startAriaButton.isEnabled = state.allDone
         startAriaButton.alpha = if (state.allDone) 1f else 0.5f
+        if (state.allDone) {
+            startAriaButton.animate()
+                .scaleX(1.03f)
+                .scaleY(1.03f)
+                .setDuration(280)
+                .setInterpolator(OvershootInterpolator())
+                .withEndAction {
+                    startAriaButton.animate().scaleX(1f).scaleY(1f).setDuration(180).start()
+                }
+                .start()
+        }
     }
 }
