@@ -1,6 +1,7 @@
 package com.aria.assistant
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -82,7 +83,8 @@ object TTSProviders {
     private fun generateElevenLabs(context: Context, text: String, voiceId: String, apiKey: String): File? {
         val payload = JSONObject().apply {
             put("text", text)
-            put("model_id", "eleven_turbo_v2")
+            // More compatible for free/basic plans
+            put("model_id", "eleven_multilingual_v2")
             put("voice_settings", JSONObject().apply {
                 put("stability", 0.5)
                 put("similarity_boost", 0.75)
@@ -111,6 +113,8 @@ object TTSProviders {
             
             return outputFile
         }
+
+        Log.e("TTSProviders", "ElevenLabs TTS failed: code=${response.code}, body=${response.body?.string()}")
         
         return null
     }
