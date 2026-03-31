@@ -136,7 +136,7 @@ object SafeIntentParser {
             if (inString) {
                 when {
                     escaped -> escaped = false
-                    ch == '\' -> escaped = true
+                    ch == '\\' -> escaped = true
                     ch == '"' -> inString = false
                 }
                 return@forEachIndexed
