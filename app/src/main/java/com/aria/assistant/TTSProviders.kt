@@ -10,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 enum class TTSProvider {
     ANDROID, ELEVENLABS, CARTESIA
@@ -79,20 +80,18 @@ object TTSProviders {
     }
     
     private fun generateElevenLabs(context: Context, text: String, voiceId: String, apiKey: String): File? {
-        val json = """
-            {
-                "text": "${text.replace("\"", "\\\"")}",
-                "model_id": "eleven_turbo_v2",
-                "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                    "style": 0.0,
-                    "use_speaker_boost": true
-                }
-            }
-        """.trimIndent()
-        
-        val requestBody = json.toRequestBody("application/json".toMediaType())
+        val payload = JSONObject().apply {
+            put("text", text)
+            put("model_id", "eleven_turbo_v2")
+            put("voice_settings", JSONObject().apply {
+                put("stability", 0.5)
+                put("similarity_boost", 0.75)
+                put("style", 0.0)
+                put("use_speaker_boost", true)
+            })
+        }
+
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
         
         val request = Request.Builder()
             .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId")
@@ -117,23 +116,21 @@ object TTSProviders {
     }
     
     private fun generateCartesia(context: Context, text: String, voiceId: String, apiKey: String): File? {
-        val json = """
-            {
-                "model_id": "sonic-english",
-                "transcript": "${text.replace("\"", "\\\"")}",
-                "voice": {
-                    "mode": "id",
-                    "id": "$voiceId"
-                },
-                "output_format": {
-                    "container": "mp3",
-                    "encoding": "mp3",
-                    "sample_rate": 44100
-                }
-            }
-        """.trimIndent()
-        
-        val requestBody = json.toRequestBody("application/json".toMediaType())
+        val payload = JSONObject().apply {
+            put("model_id", "sonic-english")
+            put("transcript", text)
+            put("voice", JSONObject().apply {
+                put("mode", "id")
+                put("id", voiceId)
+            })
+            put("output_format", JSONObject().apply {
+                put("container", "mp3")
+                put("encoding", "mp3")
+                put("sample_rate", 44100)
+            })
+        }
+
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
         
         val request = Request.Builder()
             .url("https://api.cartesia.ai/tts/bytes")

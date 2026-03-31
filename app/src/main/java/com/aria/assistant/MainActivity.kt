@@ -302,7 +302,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         val audioFile = TTSProviders.generateSpeech(this@MainActivity, text, provider, voiceId, voiceApiKey)
 
                         if (audioFile != null && audioFile.exists()) {
-                            withContext(Dispatchers.Main) { playAudioFile(audioFile) }
+                            withContext(Dispatchers.Main) { playAudioFile(audioFile, text) }
                         } else {
                             withContext(Dispatchers.Main) {
                                 if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
@@ -321,7 +321,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun playAudioFile(audioFile: File) {
+    private fun playAudioFile(audioFile: File, fallbackText: String) {
         try {
             mediaPlayer?.stop()
             mediaPlayer?.release()
@@ -335,9 +335,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     mediaPlayer = null
                     audioFile.delete()
                 }
+                setOnErrorListener { _, _, _ ->
+                    release()
+                    mediaPlayer = null
+                    audioFile.delete()
+                    if (ttsReady) tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, null)
+                    true
+                }
             }
         } catch (_: Exception) {
             audioFile.delete()
+            if (ttsReady) tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, null)
         }
     }
 
