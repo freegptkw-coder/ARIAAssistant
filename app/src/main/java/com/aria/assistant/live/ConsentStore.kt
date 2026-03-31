@@ -58,12 +58,32 @@ object ConsentStore {
         return prefs(context).getString(KEY_LIVE_WS_URL, "").orEmpty()
     }
 
+    fun setWsUrl(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_LIVE_WS_URL, value.trim()).apply()
+    }
+
     fun getWsToken(context: Context): String {
         return prefs(context).getString(KEY_LIVE_WS_TOKEN, "").orEmpty()
     }
 
+    fun setWsToken(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_LIVE_WS_TOKEN, value.trim()).apply()
+    }
+
     fun getWsCertPin(context: Context): String {
         return prefs(context).getString(KEY_LIVE_WS_CERT_PIN, "").orEmpty()
+    }
+
+    fun setWsCertPin(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_LIVE_WS_CERT_PIN, value.trim()).apply()
+    }
+
+    fun setWsConfig(context: Context, wsUrl: String, wsToken: String, certPin: String = "") {
+        prefs(context).edit()
+            .putString(KEY_LIVE_WS_URL, wsUrl.trim())
+            .putString(KEY_LIVE_WS_TOKEN, wsToken.trim())
+            .putString(KEY_LIVE_WS_CERT_PIN, certPin.trim())
+            .apply()
     }
 
     fun getDefaultSessionMinutes(context: Context): Int {

@@ -67,6 +67,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val RECORD_AUDIO_PERMISSION = 100
     private var recognitionRetryCount = 0
     private val maxRecognitionRetry = 2
+    private var manualMicTriggerUntilMs: Long = 0L
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -119,6 +120,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         
         voiceButton.setOnClickListener {
+            manualMicTriggerUntilMs = System.currentTimeMillis() + 20_000L
             startVoiceRecognition()
         }
 
@@ -187,10 +189,11 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (matches != null && matches.isNotEmpty()) {
                     val rawText = matches[0]
                     val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
-                    val wakeWordEnabled = prefs.getBoolean("wake_word_enabled", true)
+                    val wakeWordEnabled = prefs.getBoolean("wake_word_enabled", false)
+                    val manualTriggered = System.currentTimeMillis() <= manualMicTriggerUntilMs
 
                     var finalText = rawText
-                    if (wakeWordEnabled) {
+                    if (wakeWordEnabled && !manualTriggered) {
                         val lower = rawText.lowercase(Locale.getDefault())
                         val hasWakeWord = lower.contains("hey aria") || lower.contains("hi aria") || lower.startsWith("aria")
                         if (!hasWakeWord) {
@@ -204,6 +207,10 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             Toast.makeText(this@AssistantActivity, "Bolo: Hey ARIA, then command", Toast.LENGTH_SHORT).show()
                             return
                         }
+                    }
+
+                    if (manualTriggered && wakeWordEnabled) {
+                        addSystemMessage("Manual mic mode active: wake word bypassed")
                     }
 
                     messageInput.setText(finalText)
@@ -220,6 +227,7 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
+            setVoiceStatus("🎙️ Mic permission needed")
             checkPermissions()
             return
         }
@@ -240,10 +248,55 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         try {
+            setVoiceStatus("🎧 Starting mic...")
             speechRecognizer.startListening(intent)
         } catch (_: Exception) {
             recreateSpeechRecognizer()
             Toast.makeText(this, "Mic service restarted, try again", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!micGranted) {
+            setVoiceStatus("🎙️ Mic permission required")
+            addSystemMessage("Mic permission off. Please allow microphone from permission popup/settings.")
+        }
+
+        val liveEnabled = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+            .getBoolean("live_mode_enabled", false)
+        val sessionActive = com.aria.assistant.live.ConsentStore.isSessionActive(this)
+        if (liveEnabled && sessionActive) {
+            com.aria.assistant.live.LiveModeController.startService(this)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        val liveEnabled = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+            .getBoolean("live_mode_enabled", false)
+        val sessionActive = com.aria.assistant.live.ConsentStore.isSessionActive(this)
+        if (liveEnabled && sessionActive) {
+            com.aria.assistant.live.LiveModeController.startService(this)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RECORD_AUDIO_PERMISSION) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                setVoiceStatus("✅ Mic permission granted")
+                startVoiceRecognition()
+            } else {
+                setVoiceStatus("❌ Mic permission denied")
+                Toast.makeText(this, "Mic permission chara voice command kaj korbe na", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -252,7 +305,9 @@ class AssistantActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             error == SpeechRecognizer.ERROR_NETWORK ||
             error == SpeechRecognizer.ERROR_SERVER ||
             error == SpeechRecognizer.ERROR_CLIENT ||
-            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+            error == SpeechRecognizer.ERROR_NO_MATCH ||
+            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
     }
 
     private fun speechErrorReason(error: Int): String {

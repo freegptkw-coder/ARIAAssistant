@@ -222,7 +222,7 @@ class SettingsActivity : AppCompatActivity() {
 
         proactiveSwitch.isChecked = prefs.getBoolean("proactive_enabled", true)
         themeSwitch.isChecked = prefs.getBoolean("dark_mode", true)
-        wakeWordSwitch.isChecked = prefs.getBoolean("wake_word_enabled", true)
+        wakeWordSwitch.isChecked = prefs.getBoolean("wake_word_enabled", false)
         banglaModeSwitch.isChecked = prefs.getBoolean("bangla_mode", true)
         safeRootSwitch.isChecked = prefs.getBoolean("safe_root_guard", true)
         liveModeSwitch.isChecked = prefs.getBoolean("live_mode_enabled", false)

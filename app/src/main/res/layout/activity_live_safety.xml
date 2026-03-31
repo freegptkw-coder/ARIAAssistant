@@ -79,6 +79,25 @@
                     app:iconPadding="8dp" />
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/configureLiveEndpointButton"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Configure Live Endpoint"
+                    app:cornerRadius="12dp"
+                    app:icon="@android:drawable/ic_menu_edit"
+                    app:iconGravity="textStart"
+                    app:iconPadding="8dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/checkMicPermissionButton"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Check Mic Permission" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/panicStopButton"
                     style="@style/Widget.MaterialComponents.Button"
                     android:layout_width="match_parent"

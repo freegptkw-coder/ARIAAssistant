@@ -1,13 +1,19 @@
 package com.aria.assistant.live
 
+import android.Manifest
 import android.animation.ObjectAnimator
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.aria.assistant.AiReliabilityLogger
 import com.aria.assistant.R
 import com.aria.assistant.automation.AutomationAuditLogger
@@ -39,6 +45,23 @@ class LiveSafetyActivity : AppCompatActivity() {
 
         findViewById<MaterialButton>(R.id.openLiveConsentButton).setOnClickListener {
             LiveModeController.requestSession(this)
+        }
+
+        findViewById<MaterialButton>(R.id.configureLiveEndpointButton).setOnClickListener {
+            showEndpointConfigDialog()
+        }
+
+        findViewById<MaterialButton>(R.id.checkMicPermissionButton).setOnClickListener {
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            Toast.makeText(
+                this,
+                if (granted) "Mic permission: granted ✅" else "Mic permission: denied ❌",
+                Toast.LENGTH_LONG
+            ).show()
+            if (!granted) {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
         }
 
         findViewById<MaterialButton>(R.id.panicStopButton).setOnClickListener {
@@ -130,6 +153,15 @@ class LiveSafetyActivity : AppCompatActivity() {
             append("\nSession Active: ")
             append(if (sessionActive) "YES" else "NO")
             append("\nRemaining: ${rem / 60000}m ${(rem % 60000) / 1000}s")
+            append("\nMic Permission: ")
+            append(
+                if (ContextCompat.checkSelfPermission(this@LiveSafetyActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+                    "GRANTED"
+                else
+                    "DENIED"
+            )
+            append("\nWS Config: ")
+            append(if (ConsentStore.getWsUrl(this@LiveSafetyActivity).isNotBlank()) "SET" else "MISSING")
             append("\nAvatar Overlay: ")
             append(if (ConsentStore.isAvatarEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nVision Interval: ")
@@ -181,6 +213,44 @@ class LiveSafetyActivity : AppCompatActivity() {
         badgePulseAnimator?.cancel()
         badgePulseAnimator = null
         stateBadge.alpha = 1f
+    }
+
+    private fun showEndpointConfigDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+        }
+
+        val urlInput = EditText(this).apply {
+            hint = "wss://..."
+            setText(ConsentStore.getWsUrl(this@LiveSafetyActivity))
+        }
+        val tokenInput = EditText(this).apply {
+            hint = "Bearer token (optional)"
+            setText(ConsentStore.getWsToken(this@LiveSafetyActivity))
+        }
+        val certInput = EditText(this).apply {
+            hint = "sha256/... pin (optional)"
+            setText(ConsentStore.getWsCertPin(this@LiveSafetyActivity))
+        }
+
+        container.addView(urlInput)
+        container.addView(tokenInput)
+        container.addView(certInput)
+
+        AlertDialog.Builder(this)
+            .setTitle("Live Endpoint")
+            .setView(container)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val wsUrl = urlInput.text?.toString().orEmpty()
+                val wsToken = tokenInput.text?.toString().orEmpty()
+                val certPin = certInput.text?.toString().orEmpty()
+                ConsentStore.setWsConfig(this, wsUrl, wsToken, certPin)
+                Toast.makeText(this, "Live endpoint saved", Toast.LENGTH_SHORT).show()
+                refreshUi()
+            }
+            .show()
     }
 
     override fun onPause() {
