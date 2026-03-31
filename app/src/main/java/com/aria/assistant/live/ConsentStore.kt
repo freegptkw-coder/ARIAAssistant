@@ -7,6 +7,8 @@ object ConsentStore {
 
     private const val KEY_LIVE_ENABLED = "live_mode_enabled"
     private const val KEY_LIVE_VISION = "live_vision_enabled"
+    private const val KEY_LIVE_AVATAR_ENABLED = "live_avatar_enabled"
+    private const val KEY_LIVE_VISION_INTERVAL_MS = "live_vision_interval_ms"
 
     private const val KEY_LIVE_WS_URL = "live_ws_url"
     private const val KEY_LIVE_WS_TOKEN = "live_ws_token"
@@ -30,6 +32,26 @@ object ConsentStore {
 
     fun setVisionEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_LIVE_VISION, enabled).apply()
+    }
+
+    fun isAvatarEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_LIVE_AVATAR_ENABLED, true)
+    }
+
+    fun setAvatarEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LIVE_AVATAR_ENABLED, enabled).apply()
+    }
+
+    fun getVisionIntervalMs(context: Context): Long {
+        return prefs(context)
+            .getLong(KEY_LIVE_VISION_INTERVAL_MS, 2500L)
+            .coerceIn(1200L, 15000L)
+    }
+
+    fun setVisionIntervalMs(context: Context, value: Long) {
+        prefs(context).edit()
+            .putLong(KEY_LIVE_VISION_INTERVAL_MS, value.coerceIn(1200L, 15000L))
+            .apply()
     }
 
     fun getWsUrl(context: Context): String {
