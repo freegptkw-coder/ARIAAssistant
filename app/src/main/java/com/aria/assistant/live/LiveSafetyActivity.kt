@@ -1,5 +1,6 @@
 package com.aria.assistant.live
 
+import android.animation.ObjectAnimator
 import android.content.Intent
 import android.os.Bundle
 import android.widget.TextView
@@ -10,9 +11,11 @@ import com.google.android.material.button.MaterialButton
 
 class LiveSafetyActivity : AppCompatActivity() {
 
+    private lateinit var stateBadge: TextView
     private lateinit var statusText: TextView
     private lateinit var auditText: TextView
     private lateinit var automationAuditText: TextView
+    private var badgePulseAnimator: ObjectAnimator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,6 +24,7 @@ class LiveSafetyActivity : AppCompatActivity() {
         supportActionBar?.title = "🛡 Live Safety Center"
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
+        stateBadge = findViewById(R.id.liveStateBadge)
         statusText = findViewById(R.id.liveSafetyStatus)
         auditText = findViewById(R.id.liveAuditText)
         automationAuditText = findViewById(R.id.automationAuditText)
@@ -80,6 +84,7 @@ class LiveSafetyActivity : AppCompatActivity() {
         val liveEnabled = ConsentStore.isLiveEnabled(this)
         val sessionActive = ConsentStore.isSessionActive(this)
         val rem = ConsentStore.getRemainingSessionMs(this)
+        val active = liveEnabled && sessionActive
 
         statusText.text = buildString {
             append("Live Enabled: ")
@@ -89,7 +94,45 @@ class LiveSafetyActivity : AppCompatActivity() {
             append("\nRemaining: ${rem / 60000}m ${(rem % 60000) / 1000}s")
         }
 
+        when {
+            active -> {
+                stateBadge.text = "ACTIVE"
+                stateBadge.setBackgroundResource(R.drawable.bg_security_badge_active)
+                startBadgePulse()
+            }
+            liveEnabled -> {
+                stateBadge.text = "ARMED"
+                stateBadge.setBackgroundResource(R.drawable.bg_security_badge_warn)
+                stopBadgePulse()
+            }
+            else -> {
+                stateBadge.text = "OFF"
+                stateBadge.setBackgroundResource(R.drawable.bg_security_badge_off)
+                stopBadgePulse()
+            }
+        }
+
         auditText.text = AuditLogger.read(this)
         automationAuditText.text = AutomationAuditLogger.read(this)
+    }
+
+    private fun startBadgePulse() {
+        if (badgePulseAnimator?.isRunning == true) return
+        badgePulseAnimator = ObjectAnimator.ofFloat(stateBadge, "alpha", 1f, 0.45f, 1f).apply {
+            duration = 900L
+            repeatCount = ObjectAnimator.INFINITE
+            start()
+        }
+    }
+
+    private fun stopBadgePulse() {
+        badgePulseAnimator?.cancel()
+        badgePulseAnimator = null
+        stateBadge.alpha = 1f
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopBadgePulse()
     }
 }
