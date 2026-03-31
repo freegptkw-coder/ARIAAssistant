@@ -354,8 +354,16 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="20dp"
+            android:layout_marginBottom="10dp"
             android:text="Open Root Safety Center" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/liveSafetyCenterButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:text="Open Live Safety Center" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/saveButton"

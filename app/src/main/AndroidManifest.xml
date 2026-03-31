@@ -81,6 +81,16 @@
             android:name=".RootSafetyActivity"
             android:exported="false"
             android:parentActivityName=".SettingsActivity" />
+
+        <activity
+            android:name=".live.LiveSafetyActivity"
+            android:exported="false"
+            android:parentActivityName=".SettingsActivity" />
+
+        <activity
+            android:name=".live.LiveConsentActivity"
+            android:exported="false"
+            android:parentActivityName=".SettingsActivity" />
         
         <service
             android:name=".ProactiveService"

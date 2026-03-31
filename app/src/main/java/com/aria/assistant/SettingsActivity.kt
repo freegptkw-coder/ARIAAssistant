@@ -15,6 +15,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.aria.assistant.live.LiveModeController
+import com.aria.assistant.live.LiveSafetyActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,6 +53,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var liveModeSwitch: SwitchMaterial
     private lateinit var liveVisionSwitch: SwitchMaterial
     private lateinit var rootSafetyCenterButton: MaterialButton
+    private lateinit var liveSafetyCenterButton: MaterialButton
     private lateinit var saveButton: MaterialButton
 
     private val personalities = arrayOf(
@@ -108,6 +110,7 @@ class SettingsActivity : AppCompatActivity() {
         liveModeSwitch = findViewById(R.id.liveModeSwitch)
         liveVisionSwitch = findViewById(R.id.liveVisionSwitch)
         rootSafetyCenterButton = findViewById(R.id.rootSafetyCenterButton)
+        liveSafetyCenterButton = findViewById(R.id.liveSafetyCenterButton)
         saveButton = findViewById(R.id.saveButton)
 
         setupSpinners()
@@ -117,6 +120,9 @@ class SettingsActivity : AppCompatActivity() {
         voiceTestButton.setOnClickListener { testVoiceConfig() }
         rootSafetyCenterButton.setOnClickListener {
             startActivity(Intent(this, RootSafetyActivity::class.java))
+        }
+        liveSafetyCenterButton.setOnClickListener {
+            startActivity(Intent(this, LiveSafetyActivity::class.java))
         }
 
         themeSwitch.setOnCheckedChangeListener { _, isChecked ->
@@ -329,7 +335,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         if (liveModeSwitch.isChecked) {
-            LiveModeController.start(this)
+            LiveModeController.requestSession(this)
         } else {
             LiveModeController.stop(this)
         }
