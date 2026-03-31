@@ -1,7 +1,6 @@
 package com.aria.assistant.automation
 
 import com.google.gson.Gson
-import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.util.Locale
 
@@ -109,18 +108,63 @@ object SafeIntentParser {
     fun toPrettyJson(envelope: SafeIntentEnvelope): String = gson.toJson(envelope)
 
     private fun extractJsonBlock(text: String): String? {
-        val fenced = Regex("```json\\s*(\\{[\\s\\S]*?})\\s*```", RegexOption.IGNORE_CASE)
-            .find(text)?.groupValues?.getOrNull(1)
-        if (!fenced.isNullOrBlank()) return fenced
+        // Avoid fragile regex parsing for fenced blocks; use deterministic scanning.
+        val lower = text.lowercase(Locale.getDefault())
+        val marker = "```json"
+        val markerIndex = lower.indexOf(marker)
 
-        val objRegex = Regex("(\\{[\\s\\S]*})")
-        val candidate = objRegex.find(text)?.groupValues?.getOrNull(1)
-        if (candidate.isNullOrBlank()) return null
+        if (markerIndex >= 0) {
+            val lineEnd = text.indexOf('\n', markerIndex)
+            val contentStart = if (lineEnd >= 0) lineEnd + 1 else markerIndex + marker.length
+            val fenceEnd = text.indexOf("```", contentStart)
+            if (fenceEnd > contentStart) {
+                val fencedContent = text.substring(contentStart, fenceEnd).trim()
+                extractFirstJsonObject(fencedContent)?.let { return it }
+            }
+        }
 
-        return runCatching {
-            JsonParser.parseString(candidate).asJsonObject
-            candidate
-        }.getOrNull()
+        return extractFirstJsonObject(text)
+    }
+
+    private fun extractFirstJsonObject(input: String): String? {
+        var start = -1
+        var depth = 0
+        var inString = false
+        var escaped = false
+
+        input.forEachIndexed { index, ch ->
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    ch == '\' -> escaped = true
+                    ch == '"' -> inString = false
+                }
+                return@forEachIndexed
+            }
+
+            when (ch) {
+                '"' -> inString = true
+                '{' -> {
+                    if (depth == 0) start = index
+                    depth++
+                }
+                '}' -> {
+                    if (depth > 0) {
+                        depth--
+                        if (depth == 0 && start >= 0) {
+                            val candidate = input.substring(start, index + 1)
+                            val valid = runCatching {
+                                JsonParser.parseString(candidate).asJsonObject
+                            }.isSuccess
+                            if (valid) return candidate
+                            start = -1
+                        }
+                    }
+                }
+            }
+        }
+
+        return null
     }
 
     private fun detectApps(lowerText: String): List<String> {
