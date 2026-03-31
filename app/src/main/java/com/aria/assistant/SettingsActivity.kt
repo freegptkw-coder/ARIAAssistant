@@ -37,6 +37,9 @@ class SettingsActivity : AppCompatActivity() {
     // Other
     private lateinit var proactiveSwitch: SwitchMaterial
     private lateinit var themeSwitch: SwitchMaterial
+    private lateinit var wakeWordSwitch: SwitchMaterial
+    private lateinit var banglaModeSwitch: SwitchMaterial
+    private lateinit var safeRootSwitch: SwitchMaterial
     private lateinit var saveButton: MaterialButton
     
     private val personalities = arrayOf(
@@ -80,6 +83,9 @@ class SettingsActivity : AppCompatActivity() {
         voiceApiKeyInput = findViewById(R.id.voiceApiKeyInput)
         proactiveSwitch = findViewById(R.id.proactiveSwitch)
         themeSwitch = findViewById(R.id.themeSwitch)
+        wakeWordSwitch = findViewById(R.id.wakeWordSwitch)
+        banglaModeSwitch = findViewById(R.id.banglaModeSwitch)
+        safeRootSwitch = findViewById(R.id.safeRootSwitch)
         saveButton = findViewById(R.id.saveButton)
         
         setupSpinners()
@@ -184,20 +190,23 @@ class SettingsActivity : AppCompatActivity() {
         val provIndex = providerValues.indexOf(savedProvider)
         if (provIndex >= 0) providerSpinner.setSelection(provIndex)
         
-        // Load API key
-        apiKeyInput.setText(prefs.getString("api_key", ""))
+        // Load API key (encrypted at rest)
+        apiKeyInput.setText(SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "api_key_enc", "api_key"))
         
         // Load TTS provider
         val savedTtsProvider = prefs.getString("tts_provider", "android") ?: "android"
         val ttsIndex = ttsProviderValues.indexOf(savedTtsProvider)
         if (ttsIndex >= 0) ttsProviderSpinner.setSelection(ttsIndex)
         
-        // Load voice API key
-        voiceApiKeyInput.setText(prefs.getString("voice_api_key", ""))
+        // Load voice API key (encrypted at rest)
+        voiceApiKeyInput.setText(SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "voice_api_key_enc", "voice_api_key"))
         
         // Load switches
         proactiveSwitch.isChecked = prefs.getBoolean("proactive_enabled", true)
         themeSwitch.isChecked = prefs.getBoolean("dark_mode", true)
+        wakeWordSwitch.isChecked = prefs.getBoolean("wake_word_enabled", true)
+        banglaModeSwitch.isChecked = prefs.getBoolean("bangla_mode", true)
+        safeRootSwitch.isChecked = prefs.getBoolean("safe_root_guard", true)
         
         updateModelSpinner(savedProvider)
         updateVoiceSpinner(savedTtsProvider)
@@ -242,13 +251,18 @@ class SettingsActivity : AppCompatActivity() {
             putString("nickname", nickname)
             putString("ai_provider", provider)
             putString("model", model)
-            putString("api_key", apiKey)
+            putString("api_key_enc", SecurePrefs.encrypt(apiKey))
+            putString("api_key", "") // legacy plaintext removed
             putString("tts_provider", ttsProvider)
             putString("voice_id", voiceId)
             putString("voice_name", voiceName)
-            putString("voice_api_key", voiceApiKey)
+            putString("voice_api_key_enc", SecurePrefs.encrypt(voiceApiKey))
+            putString("voice_api_key", "") // legacy plaintext removed
             putBoolean("proactive_enabled", proactiveSwitch.isChecked)
             putBoolean("dark_mode", themeSwitch.isChecked)
+            putBoolean("wake_word_enabled", wakeWordSwitch.isChecked)
+            putBoolean("bangla_mode", banglaModeSwitch.isChecked)
+            putBoolean("safe_root_guard", safeRootSwitch.isChecked)
             apply()
         }
         

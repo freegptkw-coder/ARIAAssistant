@@ -6,10 +6,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -17,12 +20,15 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.*
@@ -33,13 +39,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var chatScrollView: ScrollView
     private lateinit var messageInput: EditText
     private lateinit var voiceButton: MaterialButton
+    private lateinit var stopSpeakButton: MaterialButton
     private lateinit var sendButton: MaterialButton
     private lateinit var settingsButton: MaterialButton
+    private lateinit var voiceStatusText: TextView
     
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var tts: TextToSpeech
     private var ttsReady = false
     private var mediaPlayer: MediaPlayer? = null
+    private val speechQueue: ArrayDeque<String> = ArrayDeque()
+    private var isSpeakingNow = false
+    private var currentSpeakJob: Job? = null
+    private val healthHandler = Handler(Looper.getMainLooper())
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            AppHealthMonitor.markAlive(this@MainActivity)
+            healthHandler.postDelayed(this, 60_000)
+        }
+    }
     
     private lateinit var lettaService: LettaApiService
     private val rootExecutor = RootCommandExecutor()
@@ -51,17 +69,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         setContentView(R.layout.activity_main)
         
         lettaService = LettaApiService(this)
+        AppHealthMonitor.installCrashHandler(applicationContext)
+        AppHealthMonitor.markAppStart(this)
         
         // Initialize views
         chatContainer = findViewById(R.id.chatContainer)
         chatScrollView = findViewById(R.id.chatScrollView)
         messageInput = findViewById(R.id.messageInput)
         voiceButton = findViewById(R.id.voiceButton)
+        stopSpeakButton = findViewById(R.id.stopSpeakButton)
         sendButton = findViewById(R.id.sendButton)
         settingsButton = findViewById(R.id.settingsButton)
+        voiceStatusText = findViewById(R.id.voiceStatusText)
+
+        AppHealthMonitor.consumeLastCrashSummary(this)?.let {
+            addSystemMessage("Recovered from previous crash: $it")
+        }
         
         // Initialize TTS
         tts = TextToSpeech(this, this)
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) { runOnUiThread { onSpeechFinished() } }
+            override fun onError(utteranceId: String?) { runOnUiThread { onSpeechFinished() } }
+        })
         
         // Initialize Speech Recognizer
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
@@ -86,9 +117,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         voiceButton.setOnClickListener {
             startVoiceRecognition()
         }
+
+        stopSpeakButton.setOnClickListener {
+            stopCurrentSpeech()
+        }
         
         // Welcome message
         addAssistantMessage("Hello! I'm ARIA Assistant. How can I help you?")
+
+        // Health heartbeat
+        healthHandler.postDelayed(heartbeatRunnable, 60_000)
     }
     
     private fun checkPermissions() {
@@ -124,9 +162,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 voiceButton.text = "🎤"
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (matches != null && matches.isNotEmpty()) {
-                    val text = matches[0]
-                    messageInput.setText(text)
-                    sendMessage(text)
+                    val rawText = matches[0]
+                    val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+                    val wakeWordEnabled = prefs.getBoolean("wake_word_enabled", true)
+
+                    var finalText = rawText
+                    if (wakeWordEnabled) {
+                        val lower = rawText.lowercase(Locale.getDefault())
+                        val hasWakeWord = lower.contains("hey aria") || lower.contains("hi aria") || lower.startsWith("aria")
+                        if (!hasWakeWord) {
+                            Toast.makeText(this@MainActivity, "Wake word on: bolo 'Hey ARIA'", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        finalText = rawText
+                            .replace(Regex("(?i)^\s*(hey|hi)?\s*aria[,! ]*"), "")
+                            .trim()
+                        if (finalText.isBlank()) {
+                            Toast.makeText(this@MainActivity, "Bolo: Hey ARIA, then command", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                    }
+
+                    messageInput.setText(finalText)
+                    sendMessage(finalText)
                 }
             }
             
@@ -157,7 +215,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             addAssistantMessage(commandResponse)
             
             // Also speak it
-            speakWithVoiceProvider(commandResponse)
+            enqueueSpeech(commandResponse)
             return
         }
         
@@ -179,7 +237,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     addAssistantMessage(response.text)
                     
                     // Speak response with selected provider
-                    speakWithVoiceProvider(response.text)
+                    enqueueSpeech(response.text)
                     
                     // Execute root command if present
                     response.rootCommand?.let { command ->
@@ -199,6 +257,27 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     private fun executeRootCommand(command: String) {
+        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+        val safeGuardEnabled = prefs.getBoolean("safe_root_guard", true)
+
+        if (safeGuardEnabled && isDangerousRootCommand(command)) {
+            AlertDialog.Builder(this)
+                .setTitle("⚠️ Dangerous root command")
+                .setMessage("Command:\n$command\n\nRun anyway?")
+                .setNegativeButton("Cancel") { d, _ ->
+                    d.dismiss()
+                    addSystemMessage("Blocked dangerous command")
+                }
+                .setPositiveButton("Run") { _, _ ->
+                    runRootCommand(command)
+                }
+                .show()
+        } else {
+            runRootCommand(command)
+        }
+    }
+
+    private fun runRootCommand(command: String) {
         CoroutineScope(Dispatchers.IO).launch {
             val result = rootExecutor.execute(command)
             withContext(Dispatchers.Main) {
@@ -207,6 +286,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             }
         }
+    }
+
+    private fun isDangerousRootCommand(command: String): Boolean {
+        val lower = command.lowercase(Locale.getDefault())
+        val riskyPatterns = listOf(
+            "rm -rf /",
+            "mkfs",
+            "dd if=",
+            "reboot",
+            "shutdown",
+            "setenforce 0",
+            "chmod 777 /system",
+            "wipe",
+            "format"
+        )
+        return riskyPatterns.any { lower.contains(it) }
     }
     
     private fun addUserMessage(text: String) {
@@ -280,43 +375,150 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     
 
 
+    private fun enqueueSpeech(text: String) {
+        if (text.isBlank()) return
+        speechQueue.addLast(text)
+        if (!isSpeakingNow) processSpeechQueue()
+    }
+
+    private fun processSpeechQueue() {
+        if (isSpeakingNow || speechQueue.isEmpty()) return
+        val next = speechQueue.removeFirst()
+        isSpeakingNow = true
+        speakWithVoiceProvider(next)
+    }
+
+    private fun onSpeechFinished() {
+        isSpeakingNow = false
+        setVoiceStatus("🔇 Idle")
+        processSpeechQueue()
+    }
+
+    private fun setVoiceStatus(status: String) {
+        voiceStatusText.text = status
+    }
+
+    private fun canUseElevenLabs(charCount: Int): Boolean {
+        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+        val cal = Calendar.getInstance()
+        val monthKey = "${cal.get(Calendar.YEAR)}-${cal.get(Calendar.MONTH)}"
+        val savedMonth = prefs.getString("elevenlabs_month", monthKey)
+        var used = prefs.getInt("elevenlabs_chars_used", 0)
+
+        if (savedMonth != monthKey) {
+            used = 0
+            prefs.edit().putString("elevenlabs_month", monthKey).putInt("elevenlabs_chars_used", 0).apply()
+        }
+
+        return used + charCount <= 9800
+    }
+
+    private fun addElevenLabsUsage(charCount: Int) {
+        val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
+        val used = prefs.getInt("elevenlabs_chars_used", 0)
+        prefs.edit().putInt("elevenlabs_chars_used", used + charCount).apply()
+    }
+
+    private fun stopCurrentSpeech() {
+        currentSpeakJob?.cancel()
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
+        mediaPlayer = null
+        if (ttsReady) tts.stop()
+        speechQueue.clear()
+        isSpeakingNow = false
+        setVoiceStatus("⏹ Stopped")
+    }
+
     private fun speakWithVoiceProvider(text: String) {
         val prefs = getSharedPreferences("ARIA_PREFS", Context.MODE_PRIVATE)
         val ttsProvider = prefs.getString("tts_provider", "android") ?: "android"
         val voiceId = prefs.getString("voice_id", "android_default") ?: "android_default"
-        val voiceApiKey = prefs.getString("voice_api_key", "") ?: ""
+        val voiceApiKey = SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "voice_api_key_enc", "voice_api_key")
 
         when (ttsProvider) {
             "android" -> {
-                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                setVoiceStatus("🤖 Android speaking...")
+                if (ttsReady) {
+                    val utteranceId = "aria_${System.currentTimeMillis()}"
+                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                } else {
+                    onSpeechFinished()
+                }
             }
             "elevenlabs", "cartesia" -> {
                 if (voiceApiKey.isEmpty()) {
-                    if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                    setVoiceStatus("⚠️ Voice key missing, fallback")
+                    if (ttsReady) {
+                        val utteranceId = "aria_${System.currentTimeMillis()}"
+                        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                    } else {
+                        onSpeechFinished()
+                    }
                     return
                 }
 
-                CoroutineScope(Dispatchers.IO).launch {
+                if (ttsProvider == "elevenlabs" && !canUseElevenLabs(text.length)) {
+                    setVoiceStatus("⚠️ ElevenLabs limit near, Android fallback")
+                    if (ttsReady) {
+                        val utteranceId = "aria_${System.currentTimeMillis()}"
+                        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                    } else {
+                        onSpeechFinished()
+                    }
+                    return
+                }
+
+                setVoiceStatus("🎙️ Generating voice...")
+                currentSpeakJob = CoroutineScope(Dispatchers.IO).launch {
                     try {
                         val provider = if (ttsProvider == "elevenlabs") TTSProvider.ELEVENLABS else TTSProvider.CARTESIA
-                        val audioFile = TTSProviders.generateSpeech(this@MainActivity, text, provider, voiceId, voiceApiKey)
+                        var audioFile: File? = null
+
+                        for (attempt in 1..2) {
+                            audioFile = TTSProviders.generateSpeech(this@MainActivity, text, provider, voiceId, voiceApiKey)
+                            if (audioFile != null && audioFile.exists()) break
+                            if (attempt < 2) delay(700)
+                        }
 
                         if (audioFile != null && audioFile.exists()) {
-                            withContext(Dispatchers.Main) { playAudioFile(audioFile, text) }
+                            if (ttsProvider == "elevenlabs") addElevenLabsUsage(text.length)
+                            withContext(Dispatchers.Main) {
+                                setVoiceStatus("🔊 Playing premium voice...")
+                                playAudioFile(audioFile, text)
+                            }
                         } else {
                             withContext(Dispatchers.Main) {
-                                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                                setVoiceStatus("⚠️ Premium failed, Android fallback")
+                                if (ttsReady) {
+                                    val utteranceId = "aria_${System.currentTimeMillis()}"
+                                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                                } else {
+                                    onSpeechFinished()
+                                }
                             }
                         }
                     } catch (_: Exception) {
                         withContext(Dispatchers.Main) {
-                            if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                            setVoiceStatus("⚠️ Voice error, Android fallback")
+                            if (ttsReady) {
+                                val utteranceId = "aria_${System.currentTimeMillis()}"
+                                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                            } else {
+                                onSpeechFinished()
+                            }
                         }
                     }
                 }
             }
             else -> {
-                if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+                setVoiceStatus("🤖 Android speaking...")
+                if (ttsReady) {
+                    val utteranceId = "aria_${System.currentTimeMillis()}"
+                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                } else {
+                    onSpeechFinished()
+                }
             }
         }
     }
@@ -334,24 +536,39 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     release()
                     mediaPlayer = null
                     audioFile.delete()
+                    onSpeechFinished()
                 }
                 setOnErrorListener { _, _, _ ->
                     release()
                     mediaPlayer = null
                     audioFile.delete()
-                    if (ttsReady) tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, null)
+                    if (ttsReady) {
+                        val utteranceId = "aria_${System.currentTimeMillis()}"
+                        tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                    } else {
+                        onSpeechFinished()
+                    }
                     true
                 }
             }
         } catch (_: Exception) {
             audioFile.delete()
-            if (ttsReady) tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, null)
+            if (ttsReady) {
+                val utteranceId = "aria_${System.currentTimeMillis()}"
+                tts.speak(fallbackText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            } else {
+                onSpeechFinished()
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        healthHandler.removeCallbacks(heartbeatRunnable)
+        AppHealthMonitor.markCleanExit(this)
+        currentSpeakJob?.cancel()
         mediaPlayer?.release()
+        tts.stop()
         tts.shutdown()
         speechRecognizer.destroy()
     }

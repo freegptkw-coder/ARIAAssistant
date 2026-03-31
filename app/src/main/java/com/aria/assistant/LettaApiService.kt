@@ -8,6 +8,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class LettaResponse(
     val text: String,
@@ -27,7 +29,10 @@ class LettaApiService(private val context: Context) {
     
     private fun getProvider(): String = prefs.getString("ai_provider", "groq") ?: "groq"
     private fun getModel(): String = prefs.getString("model", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile"
-    private fun getApiKey(): String? = prefs.getString("api_key", null)
+    private fun getApiKey(): String? {
+        val key = SecurePrefs.getDecryptedString(context, "ARIA_PREFS", "api_key_enc", "api_key")
+        return key.ifEmpty { null }
+    }
     
     private fun getBaseUrl(): String {
         return when(getProvider()) {
@@ -43,68 +48,102 @@ class LettaApiService(private val context: Context) {
         val model = getModel()
         val apiKey = getApiKey()
         val baseUrl = getBaseUrl()
-        
+
         // Get personality and user info
         val personality = prefs.getString("personality", "girlfriend") ?: "girlfriend"
         val userName = prefs.getString("user_name", "") ?: ""
         val nickname = prefs.getString("nickname", "") ?: ""
-        
-        // Build system prompt (escape for JSON)
-        val systemPrompt = PersonalityPrompts.getSystemPrompt(personality, userName, nickname)
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        
-        // Escape user message
-        val escapedMessage = message
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-        
-        val json = when(provider) {
-            "gemini" -> """{"contents":[{"parts":[{"text":"$systemPrompt\n\nUser: $escapedMessage"}]}]}"""
-            "letta" -> """{"message": "$escapedMessage"}"""
-            else -> """{"model": "$model", "messages": [{"role": "system", "content": "$systemPrompt"}, {"role": "user", "content": "$escapedMessage"}], "stream": false}"""
+
+        // Bangla preference
+        val banglaModeEnabled = prefs.getBoolean("bangla_mode", true)
+        val hasBanglaText = message.any { it.code in 0x0980..0x09FF }
+        val wantsBangla = hasBanglaText || message.lowercase().contains("bangla") || message.contains("বাংলা")
+
+        var systemPrompt = PersonalityPrompts.getSystemPrompt(personality, userName, nickname)
+        if (banglaModeEnabled && wantsBangla) {
+            systemPrompt += "\n\nLanguage rule: Reply in natural Bangla/Banglish. Keep it warm, simple, and easy for TTS."
         }
-        
-        val requestBody = json.toRequestBody("application/json".toMediaType())
-        
-        val url = when(provider) {
+
+        // Memory context (last 40 turns)
+        val historyMessages = ConversationMemory.getMessages(context)
+
+        val url = when (provider) {
             "gemini" -> "$baseUrl/models/$model:generateContent?key=$apiKey"
             "letta" -> "$baseUrl/v1/agents/${prefs.getString("agent_id", "")}/messages"
             else -> "$baseUrl/chat/completions"
         }
-        
+
+        val payload = when (provider) {
+            "gemini" -> {
+                val history = ConversationMemory.getConversationHistoryForAPI(context)
+                val finalPrompt = "$systemPrompt\n\n$history\nUser: $message"
+                JSONObject().apply {
+                    put("contents", JSONArray().put(
+                        JSONObject().put("parts", JSONArray().put(JSONObject().put("text", finalPrompt)))
+                    ))
+                }
+            }
+            "letta" -> JSONObject().apply {
+                put("message", message)
+            }
+            else -> {
+                val messages = JSONArray().put(
+                    JSONObject().put("role", "system").put("content", systemPrompt)
+                )
+
+                historyMessages.forEach { msg ->
+                    if (msg.role == "user" || msg.role == "assistant") {
+                        messages.put(
+                            JSONObject()
+                                .put("role", msg.role)
+                                .put("content", msg.content)
+                        )
+                    }
+                }
+
+                messages.put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", message)
+                )
+
+                JSONObject().apply {
+                    put("model", model)
+                    put("messages", messages)
+                    put("stream", false)
+                }
+            }
+        }
+
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+
         val requestBuilder = Request.Builder()
             .url(url)
             .post(requestBody)
             .addHeader("Content-Type", "application/json")
-        
+
         if (provider != "gemini") {
-            apiKey?.let {
-                requestBuilder.addHeader("Authorization", "Bearer $it")
-            }
+            apiKey?.let { requestBuilder.addHeader("Authorization", "Bearer $it") }
         }
-        
-        val request = requestBuilder.build()
-        val response = client.newCall(request).execute()
-        
+
+        // Save user message to memory before request completes
+        ConversationMemory.addMessage(context, "user", message)
+
+        val response = client.newCall(requestBuilder.build()).execute()
+
         if (!response.isSuccessful) {
             throw Exception("API error ${response.code}: ${response.message}")
         }
-        
+
         val responseBody = response.body?.string() ?: throw Exception("Empty response")
         val parsedResponse = parseResponse(responseBody, provider)
-        
+
         // Save assistant response to memory
         ConversationMemory.addMessage(context, "assistant", parsedResponse.text)
-        
+
         return parsedResponse
     }
-    
+
     private fun parseResponse(jsonResponse: String, provider: String): LettaResponse {
         try {
             val jsonObject = JsonParser.parseString(jsonResponse).asJsonObject

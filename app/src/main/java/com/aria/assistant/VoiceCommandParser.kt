@@ -13,7 +13,7 @@ data class VoiceCommand(
 )
 
 enum class CommandType {
-    CALL, MESSAGE, OPEN_APP, SET_ALARM, NONE
+    CALL, MESSAGE, OPEN_APP, SET_ALARM, SLEEP_MODE, STUDY_MODE, MEETING_MODE, NONE
 }
 
 object VoiceCommandParser {
@@ -52,6 +52,17 @@ object VoiceCommandParser {
                 if (time != null) {
                     return VoiceCommand(CommandType.SET_ALARM, mapOf("hour" to time.first.toString(), "minute" to time.second.toString()))
                 }
+            }
+
+            // Routine shortcuts
+            lowerText.contains("sleep mode") -> {
+                return VoiceCommand(CommandType.SLEEP_MODE)
+            }
+            lowerText.contains("study mode") -> {
+                return VoiceCommand(CommandType.STUDY_MODE)
+            }
+            lowerText.contains("meeting mode") -> {
+                return VoiceCommand(CommandType.MEETING_MODE)
             }
         }
         
@@ -115,6 +126,36 @@ object VoiceCommandParser {
                     "Alarm set korchi ${hour}:${minute.toString().padStart(2, '0')} te জান! ⏰"
                 } catch (e: Exception) {
                     "Alarm set korte parlam na জান 😔"
+                }
+            }
+            
+            CommandType.SLEEP_MODE -> {
+                try {
+                    val root = RootCommandExecutor()
+                    root.execute("settings put global zen_mode 1 && svc wifi disable && settings put system screen_brightness 10")
+                    "Sleep mode on, jaan 🌙 WiFi off, DND on, brightness low."
+                } catch (e: Exception) {
+                    "Sleep mode on korte parlam na 😔"
+                }
+            }
+
+            CommandType.STUDY_MODE -> {
+                try {
+                    val root = RootCommandExecutor()
+                    root.execute("settings put global zen_mode 1 && settings put system screen_brightness 140 && svc wifi enable")
+                    "Study mode active 📚 DND on, medium brightness, WiFi on."
+                } catch (e: Exception) {
+                    "Study mode start korte parlam na 😔"
+                }
+            }
+
+            CommandType.MEETING_MODE -> {
+                try {
+                    val root = RootCommandExecutor()
+                    root.execute("settings put global zen_mode 1 && settings put system screen_off_timeout 60000")
+                    "Meeting mode active 🤝 DND on, screen timeout short."
+                } catch (e: Exception) {
+                    "Meeting mode start korte parlam na 😔"
                 }
             }
             

@@ -14,7 +14,7 @@ data class Message(
 object ConversationMemory {
     private const val PREFS_NAME = "ARIA_MEMORY"
     private const val KEY_MESSAGES = "conversation_messages"
-    private const val MAX_MESSAGES = 10 // Keep last 10 messages
+    private const val MAX_MESSAGES = 40 // Keep last 40 messages
     
     private val gson = Gson()
     
