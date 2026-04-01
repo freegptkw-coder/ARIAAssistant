@@ -175,8 +175,8 @@ object TTSProviders {
             })
             put("output_format", JSONObject().apply {
                 put("container", "mp3")
-                put("encoding", "mp3")
                 put("sample_rate", 44100)
+                put("bit_rate", 128000)
             })
         }
 
@@ -186,7 +186,7 @@ object TTSProviders {
             .url("https://api.cartesia.ai/tts/bytes")
             .post(requestBody)
             .addHeader("X-API-Key", apiKey)
-            .addHeader("Cartesia-Version", "2024-06-10")
+            .addHeader("Cartesia-Version", "2026-03-01")
             .addHeader("Content-Type", "application/json")
             .build()
 
@@ -216,6 +216,9 @@ object TTSProviders {
         return when {
             code == 401 || lower.contains("invalid api key") || lower.contains("unauthorized") -> "invalid_key"
             code == 404 || lower.contains("voice_not_found") || lower.contains("voice not found") -> "voice_not_found"
+            code == 400 && lower.contains("bit_rate") -> "invalid_output_format"
+            code == 400 && lower.contains("model") -> "invalid_model"
+            code == 400 && lower.contains("voice") -> "invalid_voice_id"
             code == 429 || lower.contains("quota") || lower.contains("rate limit") -> "quota_exceeded"
             lower.contains("paid_plan_required") -> "paid_plan_required"
             code in 500..599 -> "server_error"

@@ -357,7 +357,7 @@ class SettingsActivity : AppCompatActivity() {
             putString("voice_id_custom", if (ttsProvider == "android") "" else customVoiceId)
             putString(
                 "voice_name_custom",
-                if (ttsProvider == "android" || customVoiceId.isBlank()) "" else customVoiceName
+                if (ttsProvider == "android" || customVoiceId.isBlank()) "" else voiceName
             )
             putString("voice_api_key_enc", SecurePrefs.encrypt(voiceApiKey))
             putString("voice_api_key", "")
@@ -408,7 +408,12 @@ class SettingsActivity : AppCompatActivity() {
         val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
         if (customVoiceId.isNotBlank()) {
             val customVoiceName = customVoiceNameInput.text?.toString().orEmpty().trim()
-            return customVoiceId to customVoiceName.ifBlank { "Custom Voice" }
+            val defaultName = when (ttsProvider) {
+                "cartesia" -> "Cartesia Custom"
+                "elevenlabs" -> "ElevenLabs Custom"
+                else -> "Custom Voice"
+            }
+            return customVoiceId to customVoiceName.ifBlank { defaultName }
         }
 
         val voiceList = when (ttsProvider) {
