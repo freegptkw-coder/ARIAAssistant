@@ -40,6 +40,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var ttsProviderSpinner: Spinner
     private lateinit var voiceSpinner: Spinner
     private lateinit var customVoiceIdInput: TextInputEditText
+    private lateinit var customVoiceNameInput: TextInputEditText
     private lateinit var voiceApiKeyInput: TextInputEditText
     private lateinit var voiceTestButton: MaterialButton
 
@@ -101,6 +102,7 @@ class SettingsActivity : AppCompatActivity() {
         ttsProviderSpinner = findViewById(R.id.ttsProviderSpinner)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         customVoiceIdInput = findViewById(R.id.customVoiceIdInput)
+        customVoiceNameInput = findViewById(R.id.customVoiceNameInput)
         voiceApiKeyInput = findViewById(R.id.voiceApiKeyInput)
         voiceTestButton = findViewById(R.id.voiceTestButton)
 
@@ -225,11 +227,22 @@ class SettingsActivity : AppCompatActivity() {
 
         val savedVoiceId = prefs.getString("voice_id", "android_default").orEmpty()
         val savedCustomVoiceId = prefs.getString("voice_id_custom", "").orEmpty()
+        val savedCustomVoiceName = prefs.getString("voice_name_custom", "").orEmpty()
+        val savedVoiceName = prefs.getString("voice_name", "").orEmpty()
         val knownVoice = TTSProviders.getAllVoices().any { it.id == savedVoiceId }
+        val isCustomVoice = savedCustomVoiceId.isNotBlank() ||
+            (savedVoiceId.isNotBlank() && savedVoiceId != "android_default" && !knownVoice)
         customVoiceIdInput.setText(
             when {
                 savedCustomVoiceId.isNotBlank() -> savedCustomVoiceId
                 savedVoiceId.isNotBlank() && savedVoiceId != "android_default" && !knownVoice -> savedVoiceId
+                else -> ""
+            }
+        )
+        customVoiceNameInput.setText(
+            when {
+                savedCustomVoiceName.isNotBlank() -> savedCustomVoiceName
+                isCustomVoice && savedVoiceName.isNotBlank() && savedVoiceName != "Custom Voice" -> savedVoiceName
                 else -> ""
             }
         )
@@ -313,6 +326,7 @@ class SettingsActivity : AppCompatActivity() {
         val ttsProvider = ttsProviderValues[ttsProviderSpinner.selectedItemPosition]
         val voiceApiKey = voiceApiKeyInput.text.toString()
         val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
+        val customVoiceName = customVoiceNameInput.text?.toString().orEmpty().trim()
         val (voiceId, voiceName) = resolveSelectedVoice(ttsProvider)
 
         if (apiKey.isEmpty()) {
@@ -341,6 +355,10 @@ class SettingsActivity : AppCompatActivity() {
             putString("voice_id", voiceId)
             putString("voice_name", voiceName)
             putString("voice_id_custom", if (ttsProvider == "android") "" else customVoiceId)
+            putString(
+                "voice_name_custom",
+                if (ttsProvider == "android" || customVoiceId.isBlank()) "" else customVoiceName
+            )
             putString("voice_api_key_enc", SecurePrefs.encrypt(voiceApiKey))
             putString("voice_api_key", "")
             putString("speech_recognition_lang", speechLang)
@@ -389,7 +407,8 @@ class SettingsActivity : AppCompatActivity() {
 
         val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
         if (customVoiceId.isNotBlank()) {
-            return customVoiceId to "Custom Voice"
+            val customVoiceName = customVoiceNameInput.text?.toString().orEmpty().trim()
+            return customVoiceId to customVoiceName.ifBlank { "Custom Voice" }
         }
 
         val voiceList = when (ttsProvider) {
