@@ -50,6 +50,16 @@ class LiveModeService : Service() {
     private var lastMemoriesNormalizedText: String = ""
     @Volatile
     private var memoriesNoResponseStreak: Int = 0
+    @Volatile
+    private var wsProtocolBroken: Boolean = false
+    @Volatile
+    private var wsForceMemoriesFallback: Boolean = false
+    @Volatile
+    private var wsOpenedAt: Long = 0L
+    @Volatile
+    private var wsLastInboundAt: Long = 0L
+    @Volatile
+    private var wsAudioSentCount: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -163,9 +173,15 @@ class LiveModeService : Service() {
         }
 
         if (wsUrl.isNotBlank()) {
+            wsProtocolBroken = false
+            wsForceMemoriesFallback = false
+            wsOpenedAt = System.currentTimeMillis()
+            wsLastInboundAt = wsOpenedAt
+            wsAudioSentCount = 0
             wsClient = RealtimeWsClient(
                 onBinaryAudioChunk = { chunk ->
                     lastAudioChunkAt = System.currentTimeMillis()
+                    wsLastInboundAt = System.currentTimeMillis()
                     avatarOverlay?.setSpeaking(true)
                     serviceScope.launch {
                         delay(650)
@@ -175,6 +191,10 @@ class LiveModeService : Service() {
                 },
                 onTextEvent = { textEvent ->
                     AuditLogger.log(this, "ws_text:${textEvent.take(40)}")
+                    val low = textEvent.lowercase()
+                    if (!low.startsWith("ws_open") && !low.startsWith("ws_ping") && !low.startsWith("ws_pong")) {
+                        wsLastInboundAt = System.currentTimeMillis()
+                    }
                     val speakable = extractSpeakableText(textEvent)
                     if (!speakable.isNullOrBlank()) {
                         avatarOverlay?.updateMessage(speakable)
@@ -186,6 +206,14 @@ class LiveModeService : Service() {
                 },
                 onClosed = { reason ->
                     AuditLogger.log(this, reason)
+                    val low = reason.lowercase()
+                    if (low.contains("1002") || low.contains("protocol error")) {
+                        wsProtocolBroken = true
+                        if (memoriesReady) {
+                            wsForceMemoriesFallback = true
+                            AuditLogger.log(this, "ws_protocol_mismatch:fallback_to_memories")
+                        }
+                    }
                     avatarOverlay?.updateMessage("Connection closed: $reason")
                 },
                 onAuthRefreshRequested = {
@@ -226,10 +254,27 @@ class LiveModeService : Service() {
                 if (voicedChunk != null) {
                     if (wsClient != null) {
                         wsClient?.sendAudioPcm(voicedChunk)
+                        wsAudioSentCount += 1
                         AuditLogger.log(this@LiveModeService, "audio_chunk_sent")
                     }
                 }
                 delay(40)
+            }
+        }
+
+        if (wsUrl.isNotBlank() && memoriesReady) {
+            serviceScope.launch {
+                while (running && isActive) {
+                    val now = System.currentTimeMillis()
+                    val staleInbound = now - wsLastInboundAt > 12_000L
+                    val openedLongEnough = now - wsOpenedAt > 15_000L
+                    if (!wsForceMemoriesFallback && wsAudioSentCount >= 8 && openedLongEnough && staleInbound) {
+                        wsForceMemoriesFallback = true
+                        AuditLogger.log(this@LiveModeService, "ws_no_reply:fallback_to_memories")
+                        avatarOverlay?.updateMessage("WS no response, switching to Memories…")
+                    }
+                    delay(2500L)
+                }
             }
         }
 
@@ -245,15 +290,22 @@ class LiveModeService : Service() {
                 ).runLoop()
             }
         } else if (visionEnabled && wsClient != null) {
+            val memoriesClient = if (memoriesReady) MemoriesImageCaptionClient(memoriesApiKey) else null
+            val prompt = ConsentStore.getMemoriesPrompt(this)
             val fallbackProvider: suspend () -> ByteArray? = {
                 captureFrameViaRoot()
             }
             val fallbackUploader: suspend (String) -> Unit = { frame64 ->
-                val payload = JSONObject()
-                    .put("type", "vision_frame")
-                    .put("image_base64", frame64)
-                    .toString()
-                wsClient?.sendText(payload)
+                val shouldUseMemories = wsForceMemoriesFallback || wsProtocolBroken
+                if (!shouldUseMemories || memoriesClient == null) {
+                    val payload = JSONObject()
+                        .put("type", "vision_frame")
+                        .put("image_base64", frame64)
+                        .toString()
+                    wsClient?.sendText(payload)
+                } else {
+                    processMemoriesFrame(memoriesClient, prompt, frame64)
+                }
             }
 
             serviceScope.launch {
@@ -272,35 +324,7 @@ class LiveModeService : Service() {
                 captureFrameViaRoot()
             }
             val fallbackUploader: suspend (String) -> Unit = { frame64 ->
-                val text = memoriesClient.describeFrameBase64(frame64, prompt)
-                if (!text.isNullOrBlank()) {
-                    memoriesNoResponseStreak = 0
-                    val trimmed = text.trim().take(240)
-                    val now = System.currentTimeMillis()
-                    val normalized = normalizeForSimilarity(trimmed)
-                    val shouldSpeak = shouldSpeakMemories(normalized, now)
-                    val shouldUpdateBubble = !isSemanticallySimilar(normalized, lastMemoriesNormalizedText)
-
-                    if (shouldUpdateBubble) {
-                        avatarOverlay?.updateMessage(trimmed)
-                    }
-
-                    if (shouldSpeak && now - lastAudioChunkAt > 1600L) {
-                        lastMemoriesNormalizedText = normalized
-                        lastMemoriesSpeechAt = now
-                        localTtsSpeaker?.speak(trimmed)
-                        AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
-                    }
-                } else {
-                    memoriesNoResponseStreak += 1
-                    if (memoriesNoResponseStreak % 3 == 0) {
-                        val err = memoriesClient.getLastError().ifBlank { "unknown" }
-                        AuditLogger.log(this@LiveModeService, "memories_no_response:$err")
-                        if (memoriesNoResponseStreak % 6 == 0) {
-                            avatarOverlay?.updateMessage("Memories no response ($err)")
-                        }
-                    }
-                }
+                processMemoriesFrame(memoriesClient, prompt, frame64)
             }
 
             serviceScope.launch {
@@ -364,6 +388,38 @@ class LiveModeService : Service() {
             return null
         }
         return runCatching { file.readBytes() }.getOrNull()
+    }
+
+    private fun processMemoriesFrame(memoriesClient: MemoriesImageCaptionClient, prompt: String, frame64: String) {
+        val text = memoriesClient.describeFrameBase64(frame64, prompt)
+        if (!text.isNullOrBlank()) {
+            memoriesNoResponseStreak = 0
+            val trimmed = text.trim().take(240)
+            val now = System.currentTimeMillis()
+            val normalized = normalizeForSimilarity(trimmed)
+            val shouldSpeak = shouldSpeakMemories(normalized, now)
+            val shouldUpdateBubble = !isSemanticallySimilar(normalized, lastMemoriesNormalizedText)
+
+            if (shouldUpdateBubble) {
+                avatarOverlay?.updateMessage(trimmed)
+            }
+
+            if (shouldSpeak && now - lastAudioChunkAt > 1600L) {
+                lastMemoriesNormalizedText = normalized
+                lastMemoriesSpeechAt = now
+                localTtsSpeaker?.speak(trimmed)
+                AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
+            }
+        } else {
+            memoriesNoResponseStreak += 1
+            if (memoriesNoResponseStreak % 3 == 0) {
+                val err = memoriesClient.getLastError().ifBlank { "unknown" }
+                AuditLogger.log(this@LiveModeService, "memories_no_response:$err")
+                if (memoriesNoResponseStreak % 6 == 0) {
+                    avatarOverlay?.updateMessage("Memories no response ($err)")
+                }
+            }
+        }
     }
 
     private fun shouldSpeakMemories(normalizedText: String, nowMs: Long): Boolean {
