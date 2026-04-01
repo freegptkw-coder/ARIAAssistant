@@ -16,6 +16,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.max
+import kotlin.math.min
 
 class LiveModeService : Service() {
 
@@ -45,7 +47,7 @@ class LiveModeService : Service() {
     @Volatile
     private var lastMemoriesSpeechAt: Long = 0L
     @Volatile
-    private var lastMemoriesText: String = ""
+    private var lastMemoriesNormalizedText: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -258,11 +260,17 @@ class LiveModeService : Service() {
                 if (!text.isNullOrBlank()) {
                     val trimmed = text.trim().take(240)
                     val now = System.currentTimeMillis()
-                    val isDuplicate = trimmed.equals(lastMemoriesText, ignoreCase = true)
-                    if (!isDuplicate || now - lastMemoriesSpeechAt > 10_000L) {
-                        lastMemoriesText = trimmed
-                        lastMemoriesSpeechAt = now
+                    val normalized = normalizeForSimilarity(trimmed)
+                    val shouldSpeak = shouldSpeakMemories(normalized, now)
+                    val shouldUpdateBubble = !isSemanticallySimilar(normalized, lastMemoriesNormalizedText)
+
+                    if (shouldUpdateBubble) {
                         avatarOverlay?.updateMessage(trimmed)
+                    }
+
+                    if (shouldSpeak && now - lastAudioChunkAt > 1600L) {
+                        lastMemoriesNormalizedText = normalized
+                        lastMemoriesSpeechAt = now
                         localTtsSpeaker?.speak(trimmed)
                         AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
                     }
@@ -321,5 +329,46 @@ class LiveModeService : Service() {
         val file = File(path)
         if (!file.exists() || file.length() <= 0) return null
         return runCatching { file.readBytes() }.getOrNull()
+    }
+
+    private fun shouldSpeakMemories(normalizedText: String, nowMs: Long): Boolean {
+        if (normalizedText.isBlank()) return false
+
+        val sinceLast = nowMs - lastMemoriesSpeechAt
+        if (sinceLast < 3500L) return false
+
+        if (lastMemoriesNormalizedText.isBlank()) return true
+
+        val isSimilar = isSemanticallySimilar(normalizedText, lastMemoriesNormalizedText)
+        if (isSimilar && sinceLast < 12_000L) return false
+
+        return true
+    }
+
+    private fun normalizeForSimilarity(text: String): String {
+        return text
+            .lowercase()
+            .replace(Regex("[^a-z0-9\\u0980-\\u09FF\\u0900-\\u097F\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    private fun isSemanticallySimilar(a: String, b: String): Boolean {
+        if (a.isBlank() || b.isBlank()) return false
+        if (a == b) return true
+
+        if (a.contains(b) || b.contains(a)) {
+            val shorter = min(a.length, b.length).toDouble()
+            val longer = max(a.length, b.length).toDouble().coerceAtLeast(1.0)
+            if (shorter / longer >= 0.78) return true
+        }
+
+        val tokensA = a.split(" ").filter { it.length > 2 }.toSet()
+        val tokensB = b.split(" ").filter { it.length > 2 }.toSet()
+        if (tokensA.isEmpty() || tokensB.isEmpty()) return false
+
+        val intersection = tokensA.intersect(tokensB).size.toDouble()
+        val union = tokensA.union(tokensB).size.toDouble().coerceAtLeast(1.0)
+        return (intersection / union) >= 0.72
     }
 }

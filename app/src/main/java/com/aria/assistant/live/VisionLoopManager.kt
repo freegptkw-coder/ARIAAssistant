@@ -13,12 +13,15 @@ class VisionLoopManager(
 
     suspend fun runLoop() {
         while (currentCoroutineContext().isActive) {
+            val startedAt = System.currentTimeMillis()
             val frame = runCatching { frameProvider() }.getOrNull()
             if (frame != null && frame.isNotEmpty()) {
                 val base64 = Base64.encodeToString(frame, Base64.NO_WRAP)
                 runCatching { frameUploader(base64) }
             }
-            delay(intervalMs)
+            val elapsed = System.currentTimeMillis() - startedAt
+            val waitMs = (intervalMs - elapsed).coerceAtLeast(120L)
+            delay(waitMs)
         }
     }
 }
