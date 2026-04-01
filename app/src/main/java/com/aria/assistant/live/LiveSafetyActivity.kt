@@ -28,6 +28,7 @@ class LiveSafetyActivity : AppCompatActivity() {
     private lateinit var toggleAvatarButton: MaterialButton
     private lateinit var toggleVisionSpeedButton: MaterialButton
     private lateinit var toggleMemoriesButton: MaterialButton
+    private lateinit var toggleBackendModeButton: MaterialButton
     private var badgePulseAnimator: ObjectAnimator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,6 +45,7 @@ class LiveSafetyActivity : AppCompatActivity() {
         toggleAvatarButton = findViewById(R.id.toggleLiveAvatarButton)
         toggleVisionSpeedButton = findViewById(R.id.toggleVisionSpeedButton)
         toggleMemoriesButton = findViewById(R.id.toggleMemoriesButton)
+        toggleBackendModeButton = findViewById(R.id.toggleBackendModeButton)
 
         findViewById<MaterialButton>(R.id.openLiveConsentButton).setOnClickListener {
             LiveModeController.requestSession(this)
@@ -69,6 +71,23 @@ class LiveSafetyActivity : AppCompatActivity() {
                 if (next) "Memories.ai vision ON" else "Memories.ai vision OFF",
                 Toast.LENGTH_SHORT
             ).show()
+            refreshUi()
+        }
+
+        toggleBackendModeButton.setOnClickListener {
+            val current = ConsentStore.getLiveBackendMode(this)
+            val next = when (current) {
+                "auto" -> "ws"
+                "ws" -> "memories"
+                "memories" -> "hybrid"
+                else -> "auto"
+            }
+            ConsentStore.setLiveBackendMode(this, next)
+            if (next == "memories" && !ConsentStore.isVisionEnabled(this)) {
+                ConsentStore.setVisionEnabled(this, true)
+                Toast.makeText(this, "Live Vision auto-enabled for Memories mode", Toast.LENGTH_SHORT).show()
+            }
+            Toast.makeText(this, "Live backend mode: ${next.uppercase()}", Toast.LENGTH_SHORT).show()
             refreshUi()
         }
 
@@ -191,6 +210,8 @@ class LiveSafetyActivity : AppCompatActivity() {
             val memoriesState = if (ConsentStore.isMemoriesEnabled(this@LiveSafetyActivity)) "ON" else "OFF"
             val memoriesKeyState = if (ConsentStore.getMemoriesApiKey(this@LiveSafetyActivity).isNotBlank()) "KEY_SET" else "KEY_MISSING"
             append("$memoriesState ($memoriesKeyState)")
+            append("\nBackend Mode: ")
+            append(ConsentStore.getLiveBackendMode(this@LiveSafetyActivity).uppercase())
             append("\nAvatar Overlay: ")
             append(if (ConsentStore.isAvatarEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nVision Interval: ")
@@ -222,6 +243,14 @@ class LiveSafetyActivity : AppCompatActivity() {
             memoriesOn -> "Memories Vision: ON (key needed)"
             else -> "Memories Vision: OFF"
         }
+
+        val modeLabel = when (ConsentStore.getLiveBackendMode(this)) {
+            "ws" -> "WS ONLY"
+            "memories" -> "MEMORIES ONLY"
+            "hybrid" -> "HYBRID"
+            else -> "AUTO SMART"
+        }
+        toggleBackendModeButton.text = "Live Backend: $modeLabel"
 
         when {
             active -> {

@@ -110,6 +110,13 @@
                     android:text="Memories Vision: OFF" />
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/toggleBackendModeButton"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Live Backend: AUTO" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/checkMicPermissionButton"
                     style="@style/Widget.MaterialComponents.Button.TextButton"
                     android:layout_width="match_parent"

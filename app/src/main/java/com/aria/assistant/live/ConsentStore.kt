@@ -11,6 +11,7 @@ object ConsentStore {
     private const val KEY_LIVE_ALWAYS_ON = "live_always_on"
     private const val KEY_LIVE_AVATAR_ENABLED = "live_avatar_enabled"
     private const val KEY_LIVE_VISION_INTERVAL_MS = "live_vision_interval_ms"
+    private const val KEY_LIVE_BACKEND_MODE = "live_backend_mode"
 
     private const val KEY_LIVE_WS_URL = "live_ws_url"
     private const val KEY_LIVE_WS_TOKEN = "live_ws_token"
@@ -67,6 +68,22 @@ object ConsentStore {
         prefs(context).edit()
             .putLong(KEY_LIVE_VISION_INTERVAL_MS, value.coerceIn(1200L, 15000L))
             .apply()
+    }
+
+    fun getLiveBackendMode(context: Context): String {
+        val mode = prefs(context).getString(KEY_LIVE_BACKEND_MODE, "auto").orEmpty().lowercase()
+        return when (mode) {
+            "auto", "ws", "memories", "hybrid" -> mode
+            else -> "auto"
+        }
+    }
+
+    fun setLiveBackendMode(context: Context, mode: String) {
+        val safeMode = when (mode.lowercase()) {
+            "auto", "ws", "memories", "hybrid" -> mode.lowercase()
+            else -> "auto"
+        }
+        prefs(context).edit().putString(KEY_LIVE_BACKEND_MODE, safeMode).apply()
     }
 
     fun getWsUrl(context: Context): String {

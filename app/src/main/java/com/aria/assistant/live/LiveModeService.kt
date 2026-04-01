@@ -60,6 +60,8 @@ class LiveModeService : Service() {
     private var wsLastInboundAt: Long = 0L
     @Volatile
     private var wsAudioSentCount: Int = 0
+    @Volatile
+    private var wsLastNoReplyAlertAt: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -147,16 +149,22 @@ class LiveModeService : Service() {
         }
 
         val wsUrl = ConsentStore.getWsUrl(this)
+        val backendMode = ConsentStore.getLiveBackendMode(this)
+        val wsConfigured = wsUrl.isNotBlank()
+        val wsAllowedByMode = backendMode == "auto" || backendMode == "ws" || backendMode == "hybrid"
+        val memoriesAllowedByMode = backendMode == "auto" || backendMode == "memories" || backendMode == "hybrid"
         val visionEnabled = ConsentStore.isVisionEnabled(this)
         val memoriesEnabled = ConsentStore.isMemoriesEnabled(this)
         val memoriesApiKey = ConsentStore.getMemoriesApiKey(this)
         val memoriesReady = memoriesEnabled && memoriesApiKey.isNotBlank()
+        val wsEnabled = wsConfigured && wsAllowedByMode
+        val memoriesEnabledForSession = memoriesReady && memoriesAllowedByMode
         AuditLogger.log(
             this,
-            "live_config:ws=${if (wsUrl.isNotBlank()) "set" else "none"},vision=$visionEnabled,memories=$memoriesEnabled"
+            "live_config:mode=$backendMode,ws=${if (wsEnabled) "on" else "off"},vision=$visionEnabled,memories=${if (memoriesEnabledForSession) "on" else "off"}"
         )
 
-        if (wsUrl.isBlank() && !memoriesReady) {
+        if (!wsEnabled && !memoriesEnabledForSession) {
             AuditLogger.log(this, "live_not_started:no_backend_configured")
             avatarOverlay?.updateMessage("No backend set. Configure WS or Memories.ai API key.")
             localTtsSpeaker?.speak("Live backend missing. Configure WS or Memories key.")
@@ -164,7 +172,7 @@ class LiveModeService : Service() {
             return
         }
 
-        if (wsUrl.isBlank() && memoriesReady && !visionEnabled) {
+        if (!wsEnabled && memoriesEnabledForSession && !visionEnabled) {
             AuditLogger.log(this, "live_not_started:memories_requires_vision")
             avatarOverlay?.updateMessage("Enable Live Vision for Memories mode.")
             localTtsSpeaker?.speak("Memories mode needs live vision on.")
@@ -176,12 +184,13 @@ class LiveModeService : Service() {
             AuditLogger.log(this, "memories_disabled:key_missing")
         }
 
-        if (wsUrl.isNotBlank()) {
+        if (wsEnabled) {
             wsProtocolBroken = false
             wsForceMemoriesFallback = false
             wsOpenedAt = System.currentTimeMillis()
             wsLastInboundAt = wsOpenedAt
             wsAudioSentCount = 0
+            wsLastNoReplyAlertAt = 0L
             wsClient = RealtimeWsClient(
                 onBinaryAudioChunk = { chunk ->
                     lastAudioChunkAt = System.currentTimeMillis()
@@ -217,7 +226,7 @@ class LiveModeService : Service() {
                         low.contains("ws_failure")
                     ) {
                         wsProtocolBroken = true
-                        if (memoriesReady) {
+                        if (memoriesEnabledForSession) {
                             wsForceMemoriesFallback = true
                             AuditLogger.log(this, "ws_failure:fallback_to_memories")
                             if (!visionEnabled) {
@@ -239,6 +248,8 @@ class LiveModeService : Service() {
                     ConsentStore.getWsCertPin(this)
                 )
             }
+        } else if (wsConfigured && !wsAllowedByMode) {
+            AuditLogger.log(this, "live_ws_disabled:mode_$backendMode")
         } else {
             AuditLogger.log(this, "live_ws_disabled:using_memories")
         }
@@ -279,7 +290,7 @@ class LiveModeService : Service() {
             }
         }
 
-        if (wsUrl.isNotBlank() && memoriesReady) {
+        if (wsEnabled && memoriesEnabledForSession) {
             serviceScope.launch {
                 while (running && isActive) {
                     val now = System.currentTimeMillis()
@@ -289,6 +300,21 @@ class LiveModeService : Service() {
                         wsForceMemoriesFallback = true
                         AuditLogger.log(this@LiveModeService, "ws_no_reply:fallback_to_memories")
                         avatarOverlay?.updateMessage("WS no response, switching to Memories…")
+                    }
+                    delay(2500L)
+                }
+            }
+        } else if (wsEnabled) {
+            serviceScope.launch {
+                while (running && isActive) {
+                    val now = System.currentTimeMillis()
+                    val staleInbound = now - wsLastInboundAt > 12_000L
+                    val openedLongEnough = now - wsOpenedAt > 15_000L
+                    val cooldownDone = now - wsLastNoReplyAlertAt > 20_000L
+                    if (wsAudioSentCount >= 8 && openedLongEnough && staleInbound && cooldownDone) {
+                        wsLastNoReplyAlertAt = now
+                        AuditLogger.log(this@LiveModeService, "ws_no_reply:no_fallback_available")
+                        avatarOverlay?.updateMessage("WS no response. Enable Memories for backup.")
                     }
                     delay(2500L)
                 }
@@ -303,11 +329,12 @@ class LiveModeService : Service() {
                 VisionLoopManager(
                     frameProvider,
                     frameUploader,
-                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
+                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService),
+                    adaptiveMode = true
                 ).runLoop()
             }
         } else if (visionEnabled && wsClient != null) {
-            val memoriesClient = if (memoriesReady) MemoriesImageCaptionClient(memoriesApiKey) else null
+            val memoriesClient = if (memoriesEnabledForSession) MemoriesImageCaptionClient(memoriesApiKey) else null
             val prompt = ConsentStore.getMemoriesPrompt(this)
             val fallbackProvider: suspend () -> ByteArray? = {
                 captureFrameViaRoot()
@@ -335,10 +362,11 @@ class LiveModeService : Service() {
                 VisionLoopManager(
                     fallbackProvider,
                     fallbackUploader,
-                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
+                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService),
+                    adaptiveMode = true
                 ).runLoop()
             }
-        } else if (visionEnabled && memoriesReady) {
+        } else if (visionEnabled && memoriesEnabledForSession) {
             val memoriesClient = MemoriesImageCaptionClient(memoriesApiKey)
             val prompt = ConsentStore.getMemoriesPrompt(this)
 
@@ -354,7 +382,8 @@ class LiveModeService : Service() {
                 VisionLoopManager(
                     fallbackProvider,
                     fallbackUploader,
-                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
+                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService),
+                    adaptiveMode = true
                 ).runLoop()
             }
         } else if (visionEnabled) {

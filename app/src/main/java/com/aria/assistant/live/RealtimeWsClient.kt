@@ -74,10 +74,11 @@ class RealtimeWsClient(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 val code = response?.code
                 val message = t.message.orEmpty()
+                val kind = t::class.java.simpleName
 
                 if ((code == 401 || message.contains("401")) && tryRefreshAuth()) return
 
-                onClosed("ws_failure:${message.ifBlank { "unknown" }}")
+                onClosed("ws_failure:${code ?: -1}:$kind:${message.ifBlank { "unknown" }}")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
