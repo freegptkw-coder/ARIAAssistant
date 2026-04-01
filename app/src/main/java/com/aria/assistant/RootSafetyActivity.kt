@@ -1,6 +1,7 @@
 package com.aria.assistant
 
 import android.animation.ObjectAnimator
+import android.content.Intent
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
@@ -21,8 +22,12 @@ class RootSafetyActivity : AppCompatActivity() {
     private lateinit var strictModeSwitch: SwitchMaterial
     private lateinit var hardeningReportText: TextView
     private lateinit var auditLogText: TextView
+    private lateinit var crashLogText: TextView
     private lateinit var runHardeningScanButton: MaterialButton
     private lateinit var applyHardeningButton: MaterialButton
+    private lateinit var crashLoggingSwitch: SwitchMaterial
+    private lateinit var autoHealSwitch: SwitchMaterial
+    private lateinit var rootDiagSwitch: SwitchMaterial
     private val rootExecutor = RootCommandExecutor()
     private var busyAnimator: ObjectAnimator? = null
 
@@ -39,8 +44,12 @@ class RootSafetyActivity : AppCompatActivity() {
         strictModeSwitch = findViewById(R.id.strictModeSwitch)
         hardeningReportText = findViewById(R.id.hardeningReportText)
         auditLogText = findViewById(R.id.auditLogText)
+        crashLogText = findViewById(R.id.crashLogText)
         runHardeningScanButton = findViewById(R.id.runHardeningScanButton)
         applyHardeningButton = findViewById(R.id.applyHardeningButton)
+        crashLoggingSwitch = findViewById(R.id.crashLoggingSwitch)
+        autoHealSwitch = findViewById(R.id.autoHealSwitch)
+        rootDiagSwitch = findViewById(R.id.rootDiagSwitch)
 
         findViewById<MaterialButton>(R.id.savePolicyButton).setOnClickListener {
             savePolicy()
@@ -51,6 +60,31 @@ class RootSafetyActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.clearAuditButton).setOnClickListener {
             RootSafetyPolicy.clearAuditLog(this)
             refreshAudit()
+        }
+        findViewById<MaterialButton>(R.id.runSelfHealButton).setOnClickListener {
+            val result = ErrorRecoveryManager.runSelfHealNow(this)
+            Toast.makeText(this, "Self-heal done", Toast.LENGTH_SHORT).show()
+            hardeningReportText.text = "Last self-heal summary:\n$result"
+            refreshCrashLog()
+            refreshAudit()
+        }
+        findViewById<MaterialButton>(R.id.shareCrashLogButton).setOnClickListener {
+            val report = buildString {
+                append("ARIA Error Log\n")
+                append("File: ${ErrorRecoveryManager.getCrashLogFilePath()}\n\n")
+                append(ErrorRecoveryManager.getCrashLog(this@RootSafetyActivity))
+            }
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "ARIA Error Log")
+                putExtra(Intent.EXTRA_TEXT, report)
+            }
+            startActivity(Intent.createChooser(share, "Share error log"))
+        }
+        findViewById<MaterialButton>(R.id.clearCrashLogButton).setOnClickListener {
+            ErrorRecoveryManager.clearCrashLog(this)
+            refreshCrashLog()
+            Toast.makeText(this, "Crash log cleared", Toast.LENGTH_SHORT).show()
         }
         runHardeningScanButton.setOnClickListener {
             runHardeningScan()
@@ -63,8 +97,22 @@ class RootSafetyActivity : AppCompatActivity() {
             updatePolicyBadge(isChecked)
         }
 
+        crashLoggingSwitch.setOnCheckedChangeListener { _, isChecked ->
+            ErrorRecoveryManager.setCrashLoggingEnabled(this, isChecked)
+        }
+
+        autoHealSwitch.setOnCheckedChangeListener { _, isChecked ->
+            ErrorRecoveryManager.setAutoHealEnabled(this, isChecked)
+        }
+
+        rootDiagSwitch.setOnCheckedChangeListener { _, isChecked ->
+            ErrorRecoveryManager.setRootDiagnosticsEnabled(this, isChecked)
+        }
+
         loadPolicy()
+        loadCrashSettings()
         refreshAudit()
+        refreshCrashLog()
         hardeningReportText.text = "No hardening scan yet."
     }
 
@@ -89,6 +137,16 @@ class RootSafetyActivity : AppCompatActivity() {
 
     private fun refreshAudit() {
         auditLogText.text = RootSafetyPolicy.getAuditLog(this)
+    }
+
+    private fun loadCrashSettings() {
+        crashLoggingSwitch.isChecked = ErrorRecoveryManager.isCrashLoggingEnabled(this)
+        autoHealSwitch.isChecked = ErrorRecoveryManager.isAutoHealEnabled(this)
+        rootDiagSwitch.isChecked = ErrorRecoveryManager.isRootDiagnosticsEnabled(this)
+    }
+
+    private fun refreshCrashLog() {
+        crashLogText.text = ErrorRecoveryManager.getCrashLog(this)
     }
 
     private fun runHardeningScan() {
@@ -145,6 +203,12 @@ class RootSafetyActivity : AppCompatActivity() {
     override fun onDestroy() {
         setBusyState(false)
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshAudit()
+        refreshCrashLog()
     }
 
     private fun applyHardeningPack() {
