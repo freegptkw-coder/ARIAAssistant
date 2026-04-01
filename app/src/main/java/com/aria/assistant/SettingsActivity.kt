@@ -290,6 +290,11 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
 
+        if (ttsProvider == "cartesia" && customVoiceIdInput.text?.toString().orEmpty().trim().isBlank()) {
+            Toast.makeText(this, "Cartesia test er jonno Custom Voice ID din", Toast.LENGTH_LONG).show()
+            return
+        }
+
         val (voiceId, _) = resolveSelectedVoice(ttsProvider)
 
         if (voiceId.isBlank()) {
@@ -326,7 +331,6 @@ class SettingsActivity : AppCompatActivity() {
         val ttsProvider = ttsProviderValues[ttsProviderSpinner.selectedItemPosition]
         val voiceApiKey = voiceApiKeyInput.text.toString()
         val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
-        val customVoiceName = customVoiceNameInput.text?.toString().orEmpty().trim()
         val (voiceId, voiceName) = resolveSelectedVoice(ttsProvider)
 
         if (apiKey.isEmpty()) {
@@ -336,6 +340,11 @@ class SettingsActivity : AppCompatActivity() {
 
         if ((ttsProvider == "elevenlabs" || ttsProvider == "cartesia") && voiceApiKey.isEmpty()) {
             Toast.makeText(this, "⚠️ Voice API Key required for $ttsProvider!", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        if (ttsProvider == "cartesia" && customVoiceId.isBlank()) {
+            Toast.makeText(this, "⚠️ Cartesia te manual Custom Voice ID din", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -361,6 +370,8 @@ class SettingsActivity : AppCompatActivity() {
             )
             putString("voice_api_key_enc", SecurePrefs.encrypt(voiceApiKey))
             putString("voice_api_key", "")
+            remove("last_good_voice_provider")
+            remove("last_good_voice_id")
             putString("speech_recognition_lang", speechLang)
             putBoolean("proactive_enabled", proactiveSwitch.isChecked)
             putBoolean("dark_mode", themeSwitch.isChecked)

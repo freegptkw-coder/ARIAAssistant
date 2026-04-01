@@ -166,49 +166,59 @@ object TTSProviders {
     }
 
     private fun generateCartesia(context: Context, text: String, voiceId: String, apiKey: String): File? {
-        val payload = JSONObject().apply {
-            put("model_id", "sonic-english")
-            put("transcript", text)
-            put("voice", JSONObject().apply {
-                put("mode", "id")
-                put("id", voiceId)
-            })
-            put("output_format", JSONObject().apply {
-                put("container", "mp3")
-                put("sample_rate", 44100)
-                put("bit_rate", 128000)
-            })
-        }
+        val modelCandidates = listOf("sonic-3", "sonic-2")
+        var lastReason = "invalid_model"
 
-        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
-
-        val request = Request.Builder()
-            .url("https://api.cartesia.ai/tts/bytes")
-            .post(requestBody)
-            .addHeader("X-API-Key", apiKey)
-            .addHeader("Cartesia-Version", "2026-03-01")
-            .addHeader("Content-Type", "application/json")
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (response.isSuccessful) {
-                val audioBytes = response.body?.bytes() ?: run {
-                    setLastError("empty_audio")
-                    return null
-                }
-
-                val outputFile = File(context.cacheDir, "tts_cartesia_${System.currentTimeMillis()}.mp3")
-                FileOutputStream(outputFile).use { it.write(audioBytes) }
-                setLastError("")
-                return outputFile
+        for (modelId in modelCandidates) {
+            var shouldTryNextModel = false
+            val payload = JSONObject().apply {
+                put("model_id", modelId)
+                put("transcript", text)
+                put("voice", JSONObject().apply {
+                    put("mode", "id")
+                    put("id", voiceId)
+                })
+                put("output_format", JSONObject().apply {
+                    put("container", "mp3")
+                    put("sample_rate", 44100)
+                    put("bit_rate", 128000)
+                })
             }
 
-            val body = response.body?.string().orEmpty()
-            val reason = mapTtsError("cartesia", response.code, body)
-            setLastError(reason)
-            Log.e("TTSProviders", "Cartesia failed code=${response.code}, reason=$reason, body=$body")
-            return null
+            val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://api.cartesia.ai/tts/bytes")
+                .post(requestBody)
+                .addHeader("X-API-Key", apiKey)
+                .addHeader("Cartesia-Version", "2026-03-01")
+                .addHeader("Content-Type", "application/json")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val audioBytes = response.body?.bytes() ?: run {
+                        lastReason = "empty_audio"
+                        return null
+                    }
+
+                    val outputFile = File(context.cacheDir, "tts_cartesia_${System.currentTimeMillis()}.mp3")
+                    FileOutputStream(outputFile).use { it.write(audioBytes) }
+                    setLastError("")
+                    return outputFile
+                }
+
+                val body = response.body?.string().orEmpty()
+                val reason = mapTtsError("cartesia", response.code, body)
+                lastReason = reason
+                Log.e("TTSProviders", "Cartesia failed model=$modelId code=${response.code}, reason=$reason, body=$body")
+                shouldTryNextModel = reason == "invalid_model"
+            }
+
+            if (!shouldTryNextModel) break
         }
+
+        setLastError(lastReason)
+        return null
     }
 
     private fun mapTtsError(provider: String, code: Int, body: String): String {
