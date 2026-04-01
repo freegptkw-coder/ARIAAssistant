@@ -162,6 +162,8 @@ class LiveSafetyActivity : AppCompatActivity() {
             )
             append("\nWS Config: ")
             append(if (ConsentStore.getWsUrl(this@LiveSafetyActivity).isNotBlank()) "SET" else "MISSING")
+            append("\nAlways-on: ")
+            append(if (ConsentStore.isAlwaysOn(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nAvatar Overlay: ")
             append(if (ConsentStore.isAvatarEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nVision Interval: ")

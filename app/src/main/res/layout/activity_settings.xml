@@ -334,6 +334,28 @@
             android:gravity="center_vertical"
             android:background="#2D2D2D"
             android:padding="16dp"
+            android:layout_marginBottom="12dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="♾️ Always-on Background Live"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"/>
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/liveAlwaysOnSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="false"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#2D2D2D"
+            android:padding="16dp"
             android:layout_marginBottom="16dp">
             <TextView
                 android:layout_width="0dp"

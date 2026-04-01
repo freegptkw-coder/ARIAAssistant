@@ -71,11 +71,17 @@ class LiveModeService : Service() {
             return START_NOT_STICKY
         }
 
+        val alwaysOn = ConsentStore.isAlwaysOn(this)
         if (!ConsentStore.isSessionActive(this)) {
-            ConsentStore.setLiveEnabled(this, false)
-            AuditLogger.log(this, "live_not_started:session_missing_or_expired")
-            stopSelf()
-            return START_NOT_STICKY
+            if (alwaysOn) {
+                ConsentStore.startSession(this, 240)
+                AuditLogger.log(this, "live_session_auto_renewed:on_start")
+            } else {
+                ConsentStore.setLiveEnabled(this, false)
+                AuditLogger.log(this, "live_not_started:session_missing_or_expired")
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
 
         if (!running) {
@@ -175,10 +181,15 @@ class LiveModeService : Service() {
                 }
 
                 if (!ConsentStore.isSessionActive(this@LiveModeService)) {
-                    ConsentStore.setLiveEnabled(this@LiveModeService, false)
-                    AuditLogger.log(this@LiveModeService, "live_auto_stop:session_expired")
-                    stopSelf()
-                    break
+                    if (ConsentStore.isAlwaysOn(this@LiveModeService)) {
+                        ConsentStore.startSession(this@LiveModeService, 240)
+                        AuditLogger.log(this@LiveModeService, "live_session_auto_renewed:loop")
+                    } else {
+                        ConsentStore.setLiveEnabled(this@LiveModeService, false)
+                        AuditLogger.log(this@LiveModeService, "live_auto_stop:session_expired")
+                        stopSelf()
+                        break
+                    }
                 }
 
                 val voicedChunk = recorder?.readVoicedChunkOrNull()

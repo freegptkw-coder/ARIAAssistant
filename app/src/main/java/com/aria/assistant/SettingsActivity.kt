@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
+import com.aria.assistant.live.ConsentStore
 import com.aria.assistant.live.LiveModeController
 import com.aria.assistant.live.LiveSafetyActivity
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var banglaModeSwitch: SwitchMaterial
     private lateinit var safeRootSwitch: SwitchMaterial
     private lateinit var liveModeSwitch: SwitchMaterial
+    private lateinit var liveAlwaysOnSwitch: SwitchMaterial
     private lateinit var liveVisionSwitch: SwitchMaterial
     private lateinit var rootSafetyCenterButton: MaterialButton
     private lateinit var liveSafetyCenterButton: MaterialButton
@@ -108,6 +110,7 @@ class SettingsActivity : AppCompatActivity() {
         banglaModeSwitch = findViewById(R.id.banglaModeSwitch)
         safeRootSwitch = findViewById(R.id.safeRootSwitch)
         liveModeSwitch = findViewById(R.id.liveModeSwitch)
+        liveAlwaysOnSwitch = findViewById(R.id.liveAlwaysOnSwitch)
         liveVisionSwitch = findViewById(R.id.liveVisionSwitch)
         rootSafetyCenterButton = findViewById(R.id.rootSafetyCenterButton)
         liveSafetyCenterButton = findViewById(R.id.liveSafetyCenterButton)
@@ -226,6 +229,7 @@ class SettingsActivity : AppCompatActivity() {
         banglaModeSwitch.isChecked = prefs.getBoolean("bangla_mode", true)
         safeRootSwitch.isChecked = prefs.getBoolean("safe_root_guard", true)
         liveModeSwitch.isChecked = prefs.getBoolean("live_mode_enabled", false)
+        liveAlwaysOnSwitch.isChecked = prefs.getBoolean("live_always_on", false)
         liveVisionSwitch.isChecked = prefs.getBoolean("live_vision_enabled", false)
 
         val lang = prefs.getString("speech_recognition_lang", "auto") ?: "auto"
@@ -345,13 +349,25 @@ class SettingsActivity : AppCompatActivity() {
             putBoolean("bangla_mode", banglaModeSwitch.isChecked)
             putBoolean("safe_root_guard", safeRootSwitch.isChecked)
             putBoolean("live_mode_enabled", liveModeSwitch.isChecked)
+            putBoolean("live_always_on", liveAlwaysOnSwitch.isChecked)
             putBoolean("live_vision_enabled", liveVisionSwitch.isChecked)
             apply()
         }
 
         if (liveModeSwitch.isChecked) {
-            LiveModeController.requestSession(this)
+            if (liveAlwaysOnSwitch.isChecked) {
+                ConsentStore.setLiveEnabled(this, true)
+                ConsentStore.setAlwaysOn(this, true)
+                if (!ConsentStore.isSessionActive(this)) {
+                    ConsentStore.startSession(this, 240)
+                }
+                LiveModeController.startService(this)
+            } else {
+                ConsentStore.setAlwaysOn(this, false)
+                LiveModeController.requestSession(this)
+            }
         } else {
+            ConsentStore.setAlwaysOn(this, false)
             LiveModeController.stop(this)
         }
 

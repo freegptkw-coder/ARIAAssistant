@@ -7,6 +7,7 @@ object ConsentStore {
 
     private const val KEY_LIVE_ENABLED = "live_mode_enabled"
     private const val KEY_LIVE_VISION = "live_vision_enabled"
+    private const val KEY_LIVE_ALWAYS_ON = "live_always_on"
     private const val KEY_LIVE_AVATAR_ENABLED = "live_avatar_enabled"
     private const val KEY_LIVE_VISION_INTERVAL_MS = "live_vision_interval_ms"
 
@@ -24,6 +25,14 @@ object ConsentStore {
 
     fun setLiveEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_LIVE_ENABLED, enabled).apply()
+    }
+
+    fun isAlwaysOn(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_LIVE_ALWAYS_ON, false)
+    }
+
+    fun setAlwaysOn(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LIVE_ALWAYS_ON, enabled).apply()
     }
 
     fun isVisionEnabled(context: Context): Boolean {
