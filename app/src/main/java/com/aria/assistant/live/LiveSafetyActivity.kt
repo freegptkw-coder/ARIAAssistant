@@ -60,6 +60,10 @@ class LiveSafetyActivity : AppCompatActivity() {
         toggleMemoriesButton.setOnClickListener {
             val next = !ConsentStore.isMemoriesEnabled(this)
             ConsentStore.setMemoriesEnabled(this, next)
+            if (next && !ConsentStore.isVisionEnabled(this)) {
+                ConsentStore.setVisionEnabled(this, true)
+                Toast.makeText(this, "Live Vision auto-enabled for Memories", Toast.LENGTH_SHORT).show()
+            }
             Toast.makeText(
                 this,
                 if (next) "Memories.ai vision ON" else "Memories.ai vision OFF",

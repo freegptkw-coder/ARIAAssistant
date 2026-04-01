@@ -134,12 +134,29 @@ class LiveAvatarOverlay(private val context: Context) {
     }
 
     private fun applyAvatarImage(imageView: ImageView) {
-        val candidates = listOf(
+        val namedCandidates = listOf(
             "/sdcard/123/anime_girl.png",
             "/sdcard/123/aria_anime.png",
             "/sdcard/Download/aria_anime.png"
         )
-        val file = candidates.map { File(it) }.firstOrNull { it.exists() && it.length() > 0 }
+        val dirCandidates = listOf("/sdcard/123", "/sdcard/Download")
+            .map { File(it) }
+            .filter { it.exists() && it.isDirectory }
+            .flatMap { dir ->
+                dir.listFiles()?.toList().orEmpty()
+            }
+            .filter {
+                it.isFile &&
+                    it.length() > 0 &&
+                    (it.name.endsWith(".png", true) ||
+                        it.name.endsWith(".jpg", true) ||
+                        it.name.endsWith(".jpeg", true) ||
+                        it.name.endsWith(".webp", true))
+            }
+            .sortedByDescending { it.lastModified() }
+
+        val file = (namedCandidates.map { File(it) } + dirCandidates)
+            .firstOrNull { it.exists() && it.length() > 0 }
         if (file != null) {
             val bmp = BitmapFactory.decodeFile(file.absolutePath)
             if (bmp != null) {

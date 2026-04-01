@@ -87,12 +87,16 @@ class RealtimeWsClient(
         })
     }
 
-    fun sendAudioPcm(chunk: ByteArray) {
-        socket?.send(ByteString.of(*chunk))
+    fun sendAudioPcm(chunk: ByteArray): Boolean {
+        return runCatching {
+            socket?.send(ByteString.of(*chunk)) == true
+        }.getOrDefault(false)
     }
 
-    fun sendText(text: String) {
-        socket?.send(text)
+    fun sendText(text: String): Boolean {
+        return runCatching {
+            socket?.send(text) == true
+        }.getOrDefault(false)
     }
 
     fun close() {

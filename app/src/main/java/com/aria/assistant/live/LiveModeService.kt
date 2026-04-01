@@ -151,6 +151,10 @@ class LiveModeService : Service() {
         val memoriesEnabled = ConsentStore.isMemoriesEnabled(this)
         val memoriesApiKey = ConsentStore.getMemoriesApiKey(this)
         val memoriesReady = memoriesEnabled && memoriesApiKey.isNotBlank()
+        AuditLogger.log(
+            this,
+            "live_config:ws=${if (wsUrl.isNotBlank()) "set" else "none"},vision=$visionEnabled,memories=$memoriesEnabled"
+        )
 
         if (wsUrl.isBlank() && !memoriesReady) {
             AuditLogger.log(this, "live_not_started:no_backend_configured")
@@ -207,11 +211,20 @@ class LiveModeService : Service() {
                 onClosed = { reason ->
                     AuditLogger.log(this, reason)
                     val low = reason.lowercase()
-                    if (low.contains("1002") || low.contains("protocol error")) {
+                    if (
+                        low.contains("1002") ||
+                        low.contains("protocol error") ||
+                        low.contains("ws_failure")
+                    ) {
                         wsProtocolBroken = true
                         if (memoriesReady) {
                             wsForceMemoriesFallback = true
-                            AuditLogger.log(this, "ws_protocol_mismatch:fallback_to_memories")
+                            AuditLogger.log(this, "ws_failure:fallback_to_memories")
+                            if (!visionEnabled) {
+                                AuditLogger.log(this, "memories_fallback_blocked:vision_off")
+                                avatarOverlay?.updateMessage("Turn ON Live Vision for Memories fallback")
+                                localTtsSpeaker?.speak("Turn on live vision for memories fallback")
+                            }
                         }
                     }
                     avatarOverlay?.updateMessage("Connection closed: $reason")
@@ -253,9 +266,13 @@ class LiveModeService : Service() {
                 val voicedChunk = recorder?.readVoicedChunkOrNull()
                 if (voicedChunk != null) {
                     if (wsClient != null) {
-                        wsClient?.sendAudioPcm(voicedChunk)
-                        wsAudioSentCount += 1
-                        AuditLogger.log(this@LiveModeService, "audio_chunk_sent")
+                        val sent = wsClient?.sendAudioPcm(voicedChunk) == true
+                        if (sent) {
+                            wsAudioSentCount += 1
+                            AuditLogger.log(this@LiveModeService, "audio_chunk_sent")
+                        } else {
+                            AuditLogger.log(this@LiveModeService, "audio_chunk_drop:ws_not_ready")
+                        }
                     }
                 }
                 delay(40)
@@ -302,7 +319,12 @@ class LiveModeService : Service() {
                         .put("type", "vision_frame")
                         .put("image_base64", frame64)
                         .toString()
-                    wsClient?.sendText(payload)
+                    val sent = wsClient?.sendText(payload) == true
+                    if (!sent && memoriesClient != null) {
+                        wsForceMemoriesFallback = true
+                        AuditLogger.log(this@LiveModeService, "vision_ws_send_failed:fallback_to_memories")
+                        processMemoriesFrame(memoriesClient, prompt, frame64)
+                    }
                 } else {
                     processMemoriesFrame(memoriesClient, prompt, frame64)
                 }
