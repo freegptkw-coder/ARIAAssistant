@@ -42,6 +42,10 @@ class LiveModeService : Service() {
     private var avatarOverlay: LiveAvatarOverlay? = null
     @Volatile
     private var lastAudioChunkAt: Long = 0L
+    @Volatile
+    private var lastMemoriesSpeechAt: Long = 0L
+    @Volatile
+    private var lastMemoriesText: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -129,47 +133,55 @@ class LiveModeService : Service() {
         }
 
         val wsUrl = ConsentStore.getWsUrl(this)
-        if (wsUrl.isBlank()) {
-            AuditLogger.log(this, "live_not_started:ws_url_missing")
-            avatarOverlay?.updateMessage("WS URL missing. Set live endpoint.")
+        val memoriesEnabled = ConsentStore.isMemoriesEnabled(this)
+        val memoriesApiKey = ConsentStore.getMemoriesApiKey(this)
+        val memoriesReady = memoriesEnabled && memoriesApiKey.isNotBlank()
+
+        if (wsUrl.isBlank() && !memoriesReady) {
+            AuditLogger.log(this, "live_not_started:no_backend_configured")
+            avatarOverlay?.updateMessage("No backend set. Configure WS or Memories.ai API key.")
             stopSelf()
             return
         }
 
-        wsClient = RealtimeWsClient(
-            onBinaryAudioChunk = { chunk ->
-                lastAudioChunkAt = System.currentTimeMillis()
-                avatarOverlay?.setSpeaking(true)
-                serviceScope.launch {
-                    delay(650)
-                    avatarOverlay?.setSpeaking(false)
-                }
-                ttsPlayer?.playChunk(chunk)
-            },
-            onTextEvent = { textEvent ->
-                AuditLogger.log(this, "ws_text:${textEvent.take(40)}")
-                val speakable = extractSpeakableText(textEvent)
-                if (!speakable.isNullOrBlank()) {
-                    avatarOverlay?.updateMessage(speakable)
-                    if (System.currentTimeMillis() - lastAudioChunkAt > 1400L) {
-                        localTtsSpeaker?.speak(speakable)
+        if (wsUrl.isNotBlank()) {
+            wsClient = RealtimeWsClient(
+                onBinaryAudioChunk = { chunk ->
+                    lastAudioChunkAt = System.currentTimeMillis()
+                    avatarOverlay?.setSpeaking(true)
+                    serviceScope.launch {
+                        delay(650)
+                        avatarOverlay?.setSpeaking(false)
                     }
+                    ttsPlayer?.playChunk(chunk)
+                },
+                onTextEvent = { textEvent ->
+                    AuditLogger.log(this, "ws_text:${textEvent.take(40)}")
+                    val speakable = extractSpeakableText(textEvent)
+                    if (!speakable.isNullOrBlank()) {
+                        avatarOverlay?.updateMessage(speakable)
+                        if (System.currentTimeMillis() - lastAudioChunkAt > 1400L) {
+                            localTtsSpeaker?.speak(speakable)
+                        }
+                    }
+                    onProactiveTextEvent?.invoke(textEvent)
+                },
+                onClosed = { reason ->
+                    AuditLogger.log(this, reason)
+                    avatarOverlay?.updateMessage("Connection closed: $reason")
+                },
+                onAuthRefreshRequested = {
+                    ConsentStore.getWsToken(this@LiveModeService)
                 }
-                onProactiveTextEvent?.invoke(textEvent)
-            },
-            onClosed = { reason ->
-                AuditLogger.log(this, reason)
-                avatarOverlay?.updateMessage("Connection closed: $reason")
-            },
-            onAuthRefreshRequested = {
-                ConsentStore.getWsToken(this@LiveModeService)
+            ).also {
+                it.connect(
+                    wsUrl,
+                    ConsentStore.getWsToken(this),
+                    ConsentStore.getWsCertPin(this)
+                )
             }
-        ).also {
-            it.connect(
-                wsUrl,
-                ConsentStore.getWsToken(this),
-                ConsentStore.getWsCertPin(this)
-            )
+        } else {
+            AuditLogger.log(this, "live_ws_disabled:using_memories")
         }
 
         serviceScope.launch {
@@ -194,8 +206,10 @@ class LiveModeService : Service() {
 
                 val voicedChunk = recorder?.readVoicedChunkOrNull()
                 if (voicedChunk != null) {
-                    wsClient?.sendAudioPcm(voicedChunk)
-                    AuditLogger.log(this@LiveModeService, "audio_chunk_sent")
+                    if (wsClient != null) {
+                        wsClient?.sendAudioPcm(voicedChunk)
+                        AuditLogger.log(this@LiveModeService, "audio_chunk_sent")
+                    }
                 }
                 delay(40)
             }
@@ -212,7 +226,7 @@ class LiveModeService : Service() {
                     intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
                 ).runLoop()
             }
-        } else if (ConsentStore.isVisionEnabled(this)) {
+        } else if (ConsentStore.isVisionEnabled(this) && wsClient != null) {
             val fallbackProvider: suspend () -> ByteArray? = {
                 captureFrameViaRoot()
             }
@@ -232,6 +246,39 @@ class LiveModeService : Service() {
                     intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
                 ).runLoop()
             }
+        } else if (ConsentStore.isVisionEnabled(this) && memoriesReady) {
+            val memoriesClient = MemoriesImageCaptionClient(memoriesApiKey)
+            val prompt = ConsentStore.getMemoriesPrompt(this)
+
+            val fallbackProvider: suspend () -> ByteArray? = {
+                captureFrameViaRoot()
+            }
+            val fallbackUploader: suspend (String) -> Unit = { frame64 ->
+                val text = memoriesClient.describeFrameBase64(frame64, prompt)
+                if (!text.isNullOrBlank()) {
+                    val trimmed = text.trim().take(240)
+                    val now = System.currentTimeMillis()
+                    val isDuplicate = trimmed.equals(lastMemoriesText, ignoreCase = true)
+                    if (!isDuplicate || now - lastMemoriesSpeechAt > 10_000L) {
+                        lastMemoriesText = trimmed
+                        lastMemoriesSpeechAt = now
+                        avatarOverlay?.updateMessage(trimmed)
+                        localTtsSpeaker?.speak(trimmed)
+                        AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
+                    }
+                }
+            }
+
+            serviceScope.launch {
+                AuditLogger.log(this@LiveModeService, "vision_loop_started:memories")
+                VisionLoopManager(
+                    fallbackProvider,
+                    fallbackUploader,
+                    intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
+                ).runLoop()
+            }
+        } else if (ConsentStore.isVisionEnabled(this)) {
+            AuditLogger.log(this@LiveModeService, "vision_loop_not_started:no_backend")
         }
     }
 

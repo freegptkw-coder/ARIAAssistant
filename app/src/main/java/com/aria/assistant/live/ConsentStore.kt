@@ -1,6 +1,7 @@
 package com.aria.assistant.live
 
 import android.content.Context
+import com.aria.assistant.SecurePrefs
 
 object ConsentStore {
     private const val PREF = "ARIA_PREFS"
@@ -14,6 +15,11 @@ object ConsentStore {
     private const val KEY_LIVE_WS_URL = "live_ws_url"
     private const val KEY_LIVE_WS_TOKEN = "live_ws_token"
     private const val KEY_LIVE_WS_CERT_PIN = "live_ws_cert_pin"
+
+    private const val KEY_MEMORIES_ENABLED = "memories_enabled"
+    private const val KEY_MEMORIES_API_KEY_ENC = "memories_api_key_enc"
+    private const val KEY_MEMORIES_API_KEY = "memories_api_key"
+    private const val KEY_MEMORIES_PROMPT = "memories_prompt"
 
     private const val KEY_SESSION_STARTED_AT = "live_session_started_at"
     private const val KEY_SESSION_ACTIVE_UNTIL = "live_session_active_until"
@@ -93,6 +99,40 @@ object ConsentStore {
             .putString(KEY_LIVE_WS_TOKEN, wsToken.trim())
             .putString(KEY_LIVE_WS_CERT_PIN, certPin.trim())
             .apply()
+    }
+
+    fun isMemoriesEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_MEMORIES_ENABLED, false)
+    }
+
+    fun setMemoriesEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_MEMORIES_ENABLED, enabled).apply()
+    }
+
+    fun getMemoriesApiKey(context: Context): String {
+        return SecurePrefs.getDecryptedString(
+            context,
+            PREF,
+            KEY_MEMORIES_API_KEY_ENC,
+            KEY_MEMORIES_API_KEY
+        )
+    }
+
+    fun setMemoriesApiKey(context: Context, apiKey: String) {
+        prefs(context).edit()
+            .putString(KEY_MEMORIES_API_KEY_ENC, SecurePrefs.encrypt(apiKey.trim()))
+            .putString(KEY_MEMORIES_API_KEY, "")
+            .apply()
+    }
+
+    fun getMemoriesPrompt(context: Context): String {
+        return prefs(context)
+            .getString(KEY_MEMORIES_PROMPT, "Describe the current screen in short helpful Bangla-English.")
+            .orEmpty()
+    }
+
+    fun setMemoriesPrompt(context: Context, prompt: String) {
+        prefs(context).edit().putString(KEY_MEMORIES_PROMPT, prompt.trim()).apply()
     }
 
     fun getDefaultSessionMinutes(context: Context): Int {
