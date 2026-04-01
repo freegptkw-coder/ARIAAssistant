@@ -48,6 +48,8 @@ class LiveModeService : Service() {
     private var lastMemoriesSpeechAt: Long = 0L
     @Volatile
     private var lastMemoriesNormalizedText: String = ""
+    @Volatile
+    private var memoriesNoResponseStreak: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -135,6 +137,7 @@ class LiveModeService : Service() {
         }
 
         val wsUrl = ConsentStore.getWsUrl(this)
+        val visionEnabled = ConsentStore.isVisionEnabled(this)
         val memoriesEnabled = ConsentStore.isMemoriesEnabled(this)
         val memoriesApiKey = ConsentStore.getMemoriesApiKey(this)
         val memoriesReady = memoriesEnabled && memoriesApiKey.isNotBlank()
@@ -142,8 +145,21 @@ class LiveModeService : Service() {
         if (wsUrl.isBlank() && !memoriesReady) {
             AuditLogger.log(this, "live_not_started:no_backend_configured")
             avatarOverlay?.updateMessage("No backend set. Configure WS or Memories.ai API key.")
+            localTtsSpeaker?.speak("Live backend missing. Configure WS or Memories key.")
             stopSelf()
             return
+        }
+
+        if (wsUrl.isBlank() && memoriesReady && !visionEnabled) {
+            AuditLogger.log(this, "live_not_started:memories_requires_vision")
+            avatarOverlay?.updateMessage("Enable Live Vision for Memories mode.")
+            localTtsSpeaker?.speak("Memories mode needs live vision on.")
+            stopSelf()
+            return
+        }
+
+        if (memoriesEnabled && memoriesApiKey.isBlank()) {
+            AuditLogger.log(this, "memories_disabled:key_missing")
         }
 
         if (wsUrl.isNotBlank()) {
@@ -219,7 +235,7 @@ class LiveModeService : Service() {
 
         val frameProvider = visionFrameProvider
         val frameUploader = visionFrameUploader
-        if (ConsentStore.isVisionEnabled(this) && frameProvider != null && frameUploader != null) {
+        if (visionEnabled && frameProvider != null && frameUploader != null) {
             serviceScope.launch {
                 AuditLogger.log(this@LiveModeService, "vision_loop_started")
                 VisionLoopManager(
@@ -228,7 +244,7 @@ class LiveModeService : Service() {
                     intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
                 ).runLoop()
             }
-        } else if (ConsentStore.isVisionEnabled(this) && wsClient != null) {
+        } else if (visionEnabled && wsClient != null) {
             val fallbackProvider: suspend () -> ByteArray? = {
                 captureFrameViaRoot()
             }
@@ -248,7 +264,7 @@ class LiveModeService : Service() {
                     intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
                 ).runLoop()
             }
-        } else if (ConsentStore.isVisionEnabled(this) && memoriesReady) {
+        } else if (visionEnabled && memoriesReady) {
             val memoriesClient = MemoriesImageCaptionClient(memoriesApiKey)
             val prompt = ConsentStore.getMemoriesPrompt(this)
 
@@ -258,6 +274,7 @@ class LiveModeService : Service() {
             val fallbackUploader: suspend (String) -> Unit = { frame64 ->
                 val text = memoriesClient.describeFrameBase64(frame64, prompt)
                 if (!text.isNullOrBlank()) {
+                    memoriesNoResponseStreak = 0
                     val trimmed = text.trim().take(240)
                     val now = System.currentTimeMillis()
                     val normalized = normalizeForSimilarity(trimmed)
@@ -274,6 +291,15 @@ class LiveModeService : Service() {
                         localTtsSpeaker?.speak(trimmed)
                         AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
                     }
+                } else {
+                    memoriesNoResponseStreak += 1
+                    if (memoriesNoResponseStreak % 3 == 0) {
+                        val err = memoriesClient.getLastError().ifBlank { "unknown" }
+                        AuditLogger.log(this@LiveModeService, "memories_no_response:$err")
+                        if (memoriesNoResponseStreak % 6 == 0) {
+                            avatarOverlay?.updateMessage("Memories no response ($err)")
+                        }
+                    }
                 }
             }
 
@@ -285,7 +311,7 @@ class LiveModeService : Service() {
                     intervalMs = ConsentStore.getVisionIntervalMs(this@LiveModeService)
                 ).runLoop()
             }
-        } else if (ConsentStore.isVisionEnabled(this)) {
+        } else if (visionEnabled) {
             AuditLogger.log(this@LiveModeService, "vision_loop_not_started:no_backend")
         }
     }
@@ -320,14 +346,23 @@ class LiveModeService : Service() {
 
     private fun captureFrameViaRoot(): ByteArray? {
         val executor = RootCommandExecutor()
-        if (!executor.checkRootAccess()) return null
+        if (!executor.checkRootAccess()) {
+            AuditLogger.log(this, "vision_capture_failed:root_unavailable")
+            return null
+        }
 
         val path = "/sdcard/aria_live_frame.png"
         val out = executor.execute("screencap -p $path")
-        if (out.contains("Error", ignoreCase = true)) return null
+        if (out.contains("Error", ignoreCase = true)) {
+            AuditLogger.log(this, "vision_capture_failed:screencap_error:${out.take(80)}")
+            return null
+        }
 
         val file = File(path)
-        if (!file.exists() || file.length() <= 0) return null
+        if (!file.exists() || file.length() <= 0) {
+            AuditLogger.log(this, "vision_capture_failed:file_missing")
+            return null
+        }
         return runCatching { file.readBytes() }.getOrNull()
     }
 

@@ -179,6 +179,8 @@ class LiveSafetyActivity : AppCompatActivity() {
             )
             append("\nWS Config: ")
             append(if (ConsentStore.getWsUrl(this@LiveSafetyActivity).isNotBlank()) "SET" else "MISSING")
+            append("\nLive Vision: ")
+            append(if (ConsentStore.isVisionEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nAlways-on: ")
             append(if (ConsentStore.isAlwaysOn(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nMemories.ai: ")
@@ -189,6 +191,14 @@ class LiveSafetyActivity : AppCompatActivity() {
             append(if (ConsentStore.isAvatarEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nVision Interval: ")
             append("${ConsentStore.getVisionIntervalMs(this@LiveSafetyActivity)}ms")
+            if (
+                ConsentStore.getWsUrl(this@LiveSafetyActivity).isBlank() &&
+                ConsentStore.isMemoriesEnabled(this@LiveSafetyActivity) &&
+                ConsentStore.getMemoriesApiKey(this@LiveSafetyActivity).isNotBlank() &&
+                !ConsentStore.isVisionEnabled(this@LiveSafetyActivity)
+            ) {
+                append("\n⚠ Memories-only mode needs Live Vision ON")
+            }
         }
 
         val avatarOn = ConsentStore.isAvatarEnabled(this)

@@ -15,6 +15,9 @@ class MemoriesImageCaptionClient(
     private val apiKey: String
 ) {
 
+    @Volatile
+    private var lastError: String = ""
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
@@ -22,7 +25,14 @@ class MemoriesImageCaptionClient(
         .build()
 
     fun describeFrameBase64(imageBase64: String, userPrompt: String): String? {
-        if (apiKey.isBlank() || imageBase64.isBlank()) return null
+        if (apiKey.isBlank()) {
+            lastError = "api_key_missing"
+            return null
+        }
+        if (imageBase64.isBlank()) {
+            lastError = "image_empty"
+            return null
+        }
 
         val optimizedBase64 = optimizeForRealtime(imageBase64)
 
@@ -43,19 +53,37 @@ class MemoriesImageCaptionClient(
 
         return runCatching {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use null
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty().take(180)
+                    lastError = "http_${response.code}:${body.ifBlank { "empty_body" }}"
+                    return@use null
+                }
                 val body = response.body?.string().orEmpty()
                 val obj = JSONObject(body)
                 val code = obj.opt("code")?.toString().orEmpty()
                 if (code.isNotBlank() && code != "0" && code != "0000") {
+                    lastError = "api_code_$code"
                     return@use null
                 }
-                val data = obj.optJSONObject("data") ?: return@use null
+                val data = obj.optJSONObject("data") ?: run {
+                    lastError = "data_missing"
+                    return@use null
+                }
                 val text = data.optString("text")
-                text.takeIf { it.isNotBlank() }
+                if (text.isBlank()) {
+                    lastError = "empty_text"
+                    null
+                } else {
+                    lastError = ""
+                    text
+                }
             }
+        }.onFailure {
+            lastError = "exception:${it::class.java.simpleName}:${it.message.orEmpty().take(120)}"
         }.getOrNull()
     }
+
+    fun getLastError(): String = lastError
 
     private fun optimizeForRealtime(base64Image: String): String {
         return runCatching {
