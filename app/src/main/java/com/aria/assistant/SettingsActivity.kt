@@ -39,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
     // Voice Provider
     private lateinit var ttsProviderSpinner: Spinner
     private lateinit var voiceSpinner: Spinner
+    private lateinit var customVoiceIdInput: TextInputEditText
     private lateinit var voiceApiKeyInput: TextInputEditText
     private lateinit var voiceTestButton: MaterialButton
 
@@ -99,6 +100,7 @@ class SettingsActivity : AppCompatActivity() {
 
         ttsProviderSpinner = findViewById(R.id.ttsProviderSpinner)
         voiceSpinner = findViewById(R.id.voiceSpinner)
+        customVoiceIdInput = findViewById(R.id.customVoiceIdInput)
         voiceApiKeyInput = findViewById(R.id.voiceApiKeyInput)
         voiceTestButton = findViewById(R.id.voiceTestButton)
 
@@ -221,6 +223,17 @@ class SettingsActivity : AppCompatActivity() {
         val savedTtsProvider = prefs.getString("tts_provider", "android") ?: "android"
         ttsProviderValues.indexOf(savedTtsProvider).takeIf { it >= 0 }?.let { ttsProviderSpinner.setSelection(it) }
 
+        val savedVoiceId = prefs.getString("voice_id", "android_default").orEmpty()
+        val savedCustomVoiceId = prefs.getString("voice_id_custom", "").orEmpty()
+        val knownVoice = TTSProviders.getAllVoices().any { it.id == savedVoiceId }
+        customVoiceIdInput.setText(
+            when {
+                savedCustomVoiceId.isNotBlank() -> savedCustomVoiceId
+                savedVoiceId.isNotBlank() && savedVoiceId != "android_default" && !knownVoice -> savedVoiceId
+                else -> ""
+            }
+        )
+
         voiceApiKeyInput.setText(SecurePrefs.getDecryptedString(this, "ARIA_PREFS", "voice_api_key_enc", "voice_api_key"))
 
         proactiveSwitch.isChecked = prefs.getBoolean("proactive_enabled", true)
@@ -264,13 +277,7 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
 
-        val voiceList = when (ttsProvider) {
-            "elevenlabs" -> TTSProviders.elevenLabsVoices
-            "cartesia" -> TTSProviders.cartesiaVoices
-            else -> TTSProviders.androidVoices
-        }
-        val selectedVoice = voiceList.getOrNull(voiceSpinner.selectedItemPosition)
-        val voiceId = selectedVoice?.id.orEmpty()
+        val (voiceId, _) = resolveSelectedVoice(ttsProvider)
 
         if (voiceId.isBlank()) {
             Toast.makeText(this, "Voice ID not selected", Toast.LENGTH_SHORT).show()
@@ -305,15 +312,8 @@ class SettingsActivity : AppCompatActivity() {
 
         val ttsProvider = ttsProviderValues[ttsProviderSpinner.selectedItemPosition]
         val voiceApiKey = voiceApiKeyInput.text.toString()
-
-        val voiceList = when (ttsProvider) {
-            "elevenlabs" -> TTSProviders.elevenLabsVoices
-            "cartesia" -> TTSProviders.cartesiaVoices
-            else -> TTSProviders.androidVoices
-        }
-        val selectedVoice = voiceList.getOrNull(voiceSpinner.selectedItemPosition)
-        val voiceId = selectedVoice?.id ?: "android_default"
-        val voiceName = selectedVoice?.name ?: "Android Default"
+        val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
+        val (voiceId, voiceName) = resolveSelectedVoice(ttsProvider)
 
         if (apiKey.isEmpty()) {
             Toast.makeText(this, "⚠️ AI API Key required!", Toast.LENGTH_SHORT).show()
@@ -340,6 +340,7 @@ class SettingsActivity : AppCompatActivity() {
             putString("tts_provider", ttsProvider)
             putString("voice_id", voiceId)
             putString("voice_name", voiceName)
+            putString("voice_id_custom", if (ttsProvider == "android") "" else customVoiceId)
             putString("voice_api_key_enc", SecurePrefs.encrypt(voiceApiKey))
             putString("voice_api_key", "")
             putString("speech_recognition_lang", speechLang)
@@ -381,6 +382,23 @@ class SettingsActivity : AppCompatActivity() {
         val personalityName = personalities[personalitySpinner.selectedItemPosition]
         Toast.makeText(this, "✅ Saved\nPersonality: $personalityName\nVoice: $voiceName", Toast.LENGTH_LONG).show()
         finish()
+    }
+
+    private fun resolveSelectedVoice(ttsProvider: String): Pair<String, String> {
+        if (ttsProvider == "android") return "android_default" to "Android Default"
+
+        val customVoiceId = customVoiceIdInput.text?.toString().orEmpty().trim()
+        if (customVoiceId.isNotBlank()) {
+            return customVoiceId to "Custom Voice"
+        }
+
+        val voiceList = when (ttsProvider) {
+            "elevenlabs" -> TTSProviders.elevenLabsVoices
+            "cartesia" -> TTSProviders.cartesiaVoices
+            else -> TTSProviders.androidVoices
+        }
+        val selectedVoice = voiceList.getOrNull(voiceSpinner.selectedItemPosition)
+        return (selectedVoice?.id ?: "android_default") to (selectedVoice?.name ?: "Android Default")
     }
 
     override fun onSupportNavigateUp(): Boolean {
