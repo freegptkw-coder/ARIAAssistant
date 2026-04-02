@@ -33,6 +33,7 @@ class LiveSafetyActivity : AppCompatActivity() {
     private lateinit var toggleVisionSpeedButton: MaterialButton
     private lateinit var toggleMemoriesButton: MaterialButton
     private lateinit var toggleBackendModeButton: MaterialButton
+    private lateinit var toggleVoiceModeButton: MaterialButton
     private var badgePulseAnimator: ObjectAnimator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,6 +52,7 @@ class LiveSafetyActivity : AppCompatActivity() {
         toggleVisionSpeedButton = findViewById(R.id.toggleVisionSpeedButton)
         toggleMemoriesButton = findViewById(R.id.toggleMemoriesButton)
         toggleBackendModeButton = findViewById(R.id.toggleBackendModeButton)
+        toggleVoiceModeButton = findViewById(R.id.toggleVoiceModeButton)
 
         findViewById<MaterialButton>(R.id.openLiveConsentButton).setOnClickListener {
             LiveModeController.requestSession(this)
@@ -93,6 +95,18 @@ class LiveSafetyActivity : AppCompatActivity() {
                 Toast.makeText(this, "Live Vision auto-enabled for Memories mode", Toast.LENGTH_SHORT).show()
             }
             Toast.makeText(this, "Live backend mode: ${next.uppercase()}", Toast.LENGTH_SHORT).show()
+            refreshUi()
+        }
+
+        toggleVoiceModeButton.setOnClickListener {
+            val current = ConsentStore.getLiveVoiceMode(this)
+            val next = when (current) {
+                "hands_free" -> "push_to_talk"
+                "push_to_talk" -> "command"
+                else -> "hands_free"
+            }
+            ConsentStore.setLiveVoiceMode(this, next)
+            Toast.makeText(this, "Voice mode: ${next.replace('_', ' ').uppercase()}", Toast.LENGTH_SHORT).show()
             refreshUi()
         }
 
@@ -219,6 +233,8 @@ class LiveSafetyActivity : AppCompatActivity() {
             append("$memoriesState ($memoriesKeyState)")
             append("\nBackend Mode: ")
             append(ConsentStore.getLiveBackendMode(this@LiveSafetyActivity).uppercase())
+            append("\nVoice Mode: ")
+            append(ConsentStore.getLiveVoiceMode(this@LiveSafetyActivity).replace('_', ' ').uppercase())
             append("\nAvatar Overlay: ")
             append(if (ConsentStore.isAvatarEnabled(this@LiveSafetyActivity)) "ON" else "OFF")
             append("\nVision Interval: ")
@@ -279,6 +295,13 @@ class LiveSafetyActivity : AppCompatActivity() {
             else -> "AUTO SMART"
         }
         toggleBackendModeButton.text = "Live Backend: $modeLabel"
+
+        val voiceModeLabel = when (ConsentStore.getLiveVoiceMode(this)) {
+            "push_to_talk" -> "PUSH TO TALK"
+            "command" -> "COMMAND"
+            else -> "HANDS FREE"
+        }
+        toggleVoiceModeButton.text = "Voice Mode: $voiceModeLabel"
 
         when {
             active -> {

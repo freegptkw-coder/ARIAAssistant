@@ -117,6 +117,13 @@
                     android:text="Live Backend: AUTO" />
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/toggleVoiceModeButton"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Voice Mode: HANDS-FREE" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/checkMicPermissionButton"
                     style="@style/Widget.MaterialComponents.Button.TextButton"
                     android:layout_width="match_parent"

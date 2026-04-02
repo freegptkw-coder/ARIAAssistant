@@ -7,8 +7,11 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.aria.assistant.RootCommandExecutor
+import com.aria.assistant.live.core.LiveDialogOrchestrator
+import com.aria.assistant.live.core.LiveSpeechOutputArbiter
 import com.aria.assistant.live.core.AudioFocusArbiter
 import com.aria.assistant.live.core.BargeInController
+import com.aria.assistant.live.core.ProviderStreamingGateway
 import com.aria.assistant.live.core.SttHealthSnapshot
 import com.aria.assistant.live.core.SttHealthTracker
 import com.aria.assistant.live.core.SttTranscriptEvent
@@ -51,6 +54,9 @@ class LiveModeService : Service() {
     private var localTtsSpeaker: LiveLocalTtsSpeaker? = null
     private var wsClient: RealtimeWsClient? = null
     private var avatarOverlay: LiveAvatarOverlay? = null
+    private var speechOutputArbiter: LiveSpeechOutputArbiter? = null
+    private var dialogOrchestrator: LiveDialogOrchestrator? = null
+    private var providerGateway: ProviderStreamingGateway? = null
     @Volatile
     private var lastAudioChunkAt: Long = 0L
     @Volatile
@@ -83,6 +89,10 @@ class LiveModeService : Service() {
     private var suppressAssistantAudioByFocus: Boolean = false
     @Volatile
     private var duckAssistantAudioByFocus: Boolean = false
+    @Volatile
+    private var pushToTalkPressed: Boolean = false
+    @Volatile
+    private var activeVoiceMode: String = "hands_free"
 
     private lateinit var voiceStateMachine: VoiceTurnStateMachine
     private lateinit var bargeInController: BargeInController
@@ -170,6 +180,15 @@ class LiveModeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            LiveModeController.ACTION_PUSH_TO_TALK_DOWN -> {
+                pushToTalkPressed = true
+            }
+            LiveModeController.ACTION_PUSH_TO_TALK_UP -> {
+                pushToTalkPressed = false
+            }
+        }
+
         if (intent?.action == LiveNotification.ACTION_STOP) {
             ConsentStore.endSession(this)
             ConsentStore.setLiveEnabled(this, false)
@@ -208,8 +227,11 @@ class LiveModeService : Service() {
         }
 
         if (!running) {
+            activeVoiceMode = ConsentStore.getLiveVoiceMode(this)
             running = true
             startPipelines()
+        } else {
+            activeVoiceMode = ConsentStore.getLiveVoiceMode(this)
         }
 
         return START_STICKY
@@ -225,15 +247,18 @@ class LiveModeService : Service() {
         }
         recorder?.stop()
         recorder = null
-        ttsPlayer?.stop()
+        speechOutputArbiter?.shutdown()
+        speechOutputArbiter = null
         ttsPlayer = null
-        localTtsSpeaker?.shutdown()
         localTtsSpeaker = null
         avatarOverlay?.hide()
         avatarOverlay = null
         cancelPendingSttRetry("service_destroy")
         wsClient?.close()
         wsClient = null
+        dialogOrchestrator?.onUserInterrupted()
+        dialogOrchestrator = null
+        providerGateway = null
         sttGateway?.stop()
         applySttHealthSnapshot(sttHealthTracker.resetAll())
         sttAvailabilityStatus = "stopped"
@@ -270,8 +295,115 @@ class LiveModeService : Service() {
             voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_initial_request_failed"))
         }
 
+        activeVoiceMode = ConsentStore.getLiveVoiceMode(this)
+        providerGateway = ProviderStreamingGateway(this)
+
         recorder = SafeAudioRecorder().also { it.start() }
         ttsPlayer = StreamingTtsPlayer().also { it.start() }
+        if (localTtsSpeaker == null) {
+            localTtsSpeaker = LiveLocalTtsSpeaker(this)
+        }
+
+        val localSpeaker = localTtsSpeaker
+        val pcmSpeaker = ttsPlayer
+        if (localSpeaker != null && pcmSpeaker != null) {
+            speechOutputArbiter = LiveSpeechOutputArbiter(
+                localSpeaker = localSpeaker,
+                pcmPlayer = pcmSpeaker,
+                onSpeechStarted = { source ->
+                    val now = System.currentTimeMillis()
+                    assistantOutputTickAt = now
+                    bargeInController.markAssistantOutputStarted(now)
+                    voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioStarted(source))
+                    avatarOverlay?.setSpeaking(true)
+                },
+                onSpeechFinished = { _ ->
+                    assistantOutputTickAt = 0L
+                    bargeInController.markAssistantOutputStopped()
+                    voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
+                    avatarOverlay?.setSpeaking(false)
+                }
+            )
+        }
+
+        dialogOrchestrator = providerGateway?.let { gateway ->
+            LiveDialogOrchestrator(
+                context = this,
+                scope = serviceScope,
+                llmGateway = gateway,
+                listener = object : LiveDialogOrchestrator.Listener {
+                    override fun onLlmRequestStarted(turnId: Long, text: String) {
+                        AuditLogger.log(this@LiveModeService, "llm_request_started:$turnId")
+                        voiceStateMachine.onEvent(VoiceSessionEvent.LlmRequestStarted)
+                    }
+
+                    override fun onLlmChunk(turnId: Long, chunk: String, source: String) {
+                        if (source.startsWith("provider_fallback")) {
+                            AuditLogger.log(this@LiveModeService, "llm_fallback:$source")
+                            return
+                        }
+                        val speakable = chunk.trim()
+                        if (speakable.isBlank()) return
+
+                        voiceStateMachine.onEvent(VoiceSessionEvent.LlmResponseChunk(speakable))
+                        avatarOverlay?.updateMessage(speakable)
+
+                        if (duckAssistantAudioByFocus) {
+                            AuditLogger.log(this@LiveModeService, "audio_focus:duck_skip_provider_tts")
+                            return
+                        }
+                        if (!canRenderAssistantAudio()) {
+                            AuditLogger.log(this@LiveModeService, "audio_focus:suppress_provider_tts")
+                            return
+                        }
+                        speechOutputArbiter?.speakText(speakable)
+                    }
+
+                    override fun onLlmCompleted(turnId: Long, fullText: String, source: String) {
+                        AuditLogger.log(this@LiveModeService, "llm_completed:$turnId:$source")
+                        if (fullText.isNotBlank()) {
+                            avatarOverlay?.updateMessage(fullText.take(240))
+                        }
+                    }
+
+                    override fun onLlmFailed(turnId: Long, reason: String) {
+                        AuditLogger.log(this@LiveModeService, "llm_failed:$turnId:$reason")
+                        voiceStateMachine.onEvent(VoiceSessionEvent.BackendFailure(reason))
+                        val fallbackMsg = "Connection issue. Trying backup provider."
+                        avatarOverlay?.updateMessage(fallbackMsg)
+                        speechOutputArbiter?.speakText(fallbackMsg, flush = true)
+                    }
+
+                    override fun onUiAcknowledgement(text: String) {
+                        avatarOverlay?.updateMessage(text)
+                        speechOutputArbiter?.speakText(text, flush = true)
+                    }
+
+                    override fun onConfirmationRequired(prompt: String) {
+                        voiceStateMachine.onEvent(VoiceSessionEvent.ConfirmationRequested(prompt))
+                        avatarOverlay?.updateMessage(prompt)
+                        speechOutputArbiter?.speakText(prompt, flush = true)
+                    }
+
+                    override fun onAutomationStarted(action: String) {
+                        voiceStateMachine.onEvent(VoiceSessionEvent.ActionExecutionStarted(action))
+                    }
+
+                    override fun onAutomationFinished(result: com.aria.assistant.automation.AutomationExecutionResult) {
+                        voiceStateMachine.onEvent(
+                            VoiceSessionEvent.ActionExecutionFinished(
+                                action = "live_automation",
+                                success = result.executed > 0 && result.blocked == 0
+                            )
+                        )
+                        val summary = result.summary.ifBlank { "Automation completed." }
+                        avatarOverlay?.updateMessage(summary)
+                        speechOutputArbiter?.speakText(summary, flush = true)
+                    }
+                }
+            )
+        }
+
         runCatching { sttGateway?.start() }
             .onFailure {
                 AuditLogger.log(this, "stt_start_error:${it.javaClass.simpleName}")
@@ -306,21 +438,12 @@ class LiveModeService : Service() {
         )
 
         if (!wsEnabled && !memoriesEnabledForSession) {
-            AuditLogger.log(this, "live_not_started:no_backend_configured")
-            avatarOverlay?.updateMessage("No backend set. Configure WS or Memories.ai API key.")
-            localTtsSpeaker?.speak("Live backend missing. Configure WS or Memories key.")
-            cancelPendingSttRetry("no_backend_configured")
-            stopSelf()
-            return
+            AuditLogger.log(this, "live_backend:provider_fallback_only")
+            avatarOverlay?.updateMessage("Live provider fallback active")
         }
 
         if (!wsEnabled && memoriesEnabledForSession && !visionEnabled) {
-            AuditLogger.log(this, "live_not_started:memories_requires_vision")
-            avatarOverlay?.updateMessage("Enable Live Vision for Memories mode.")
-            localTtsSpeaker?.speak("Memories mode needs live vision on.")
-            cancelPendingSttRetry("memories_requires_vision")
-            stopSelf()
-            return
+            AuditLogger.log(this, "memories_only_disabled:vision_required")
         }
 
         if (memoriesEnabled && memoriesApiKey.isBlank()) {
@@ -343,19 +466,10 @@ class LiveModeService : Service() {
                         lastAudioChunkAt = now
                         wsLastInboundAt = now
                         assistantOutputTickAt = now
+                        dialogOrchestrator?.onWsAssistantActivity()
                         bargeInController.markAssistantOutputStarted(now)
                         voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioChunk(source = "ws_binary"))
-                        avatarOverlay?.setSpeaking(true)
-                        serviceScope.launch {
-                            val marker = now
-                            delay(650)
-                            if (assistantOutputTickAt == marker || System.currentTimeMillis() - assistantOutputTickAt > 650L) {
-                                avatarOverlay?.setSpeaking(false)
-                                bargeInController.markAssistantOutputStopped()
-                                voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
-                            }
-                        }
-                        ttsPlayer?.playChunk(chunk)
+                        speechOutputArbiter?.playPcmChunk(chunk)
                     }
                 },
                 onTextEvent = { textEvent ->
@@ -366,6 +480,7 @@ class LiveModeService : Service() {
                     }
                     val speakable = extractSpeakableText(textEvent)
                     if (!speakable.isNullOrBlank()) {
+                        dialogOrchestrator?.onWsAssistantActivity()
                         voiceStateMachine.onEvent(VoiceSessionEvent.LlmResponseChunk(speakable))
                         avatarOverlay?.updateMessage(speakable)
                         if (System.currentTimeMillis() - lastAudioChunkAt > 1400L) {
@@ -374,20 +489,7 @@ class LiveModeService : Service() {
                             } else if (!canRenderAssistantAudio()) {
                                 AuditLogger.log(this, "audio_focus:suppress_local_tts")
                             } else {
-                                val now = System.currentTimeMillis()
-                                assistantOutputTickAt = now
-                                bargeInController.markAssistantOutputStarted(now)
-                                voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioStarted(source = "local_tts"))
-                                localTtsSpeaker?.speak(speakable)
-                                serviceScope.launch {
-                                    val marker = now
-                                    val estimatedMs = (speakable.length * 45L).coerceIn(900L, 5000L)
-                                    delay(estimatedMs)
-                                    if (assistantOutputTickAt == marker || System.currentTimeMillis() - assistantOutputTickAt > estimatedMs) {
-                                        bargeInController.markAssistantOutputStopped()
-                                        voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
-                                    }
-                                }
+                                speechOutputArbiter?.speakText(speakable)
                             }
                         }
                     }
@@ -403,14 +505,16 @@ class LiveModeService : Service() {
                         low.contains("ws_failure")
                     ) {
                         wsProtocolBroken = true
+                        wsForceMemoriesFallback = true
                         if (memoriesEnabledForSession) {
-                            wsForceMemoriesFallback = true
                             AuditLogger.log(this, "ws_failure:fallback_to_memories")
                             if (!visionEnabled) {
                                 AuditLogger.log(this, "memories_fallback_blocked:vision_off")
                                 avatarOverlay?.updateMessage("Turn ON Live Vision for Memories fallback")
-                                localTtsSpeaker?.speak("Turn on live vision for memories fallback")
+                                speechOutputArbiter?.speakText("Turn on live vision for memories fallback", flush = true)
                             }
+                        } else {
+                            AuditLogger.log(this, "ws_failure:fallback_to_provider")
                         }
                     }
                     avatarOverlay?.updateMessage("Connection closed: $reason")
@@ -428,7 +532,7 @@ class LiveModeService : Service() {
         } else if (wsConfigured && !wsAllowedByMode) {
             AuditLogger.log(this, "live_ws_disabled:mode_$backendMode")
         } else {
-            AuditLogger.log(this, "live_ws_disabled:using_memories")
+            AuditLogger.log(this, "live_ws_disabled:using_provider_fallback")
         }
 
         serviceScope.launch {
@@ -508,7 +612,8 @@ class LiveModeService : Service() {
                         interruptAssistantSpeech(decision.reason)
                     }
 
-                    if (wsClient != null) {
+                    val shouldSendAudioToWs = wsClient != null && ConsentStore.getLiveBackendMode(this@LiveModeService) == "ws"
+                    if (shouldSendAudioToWs) {
                         val sent = wsClient?.sendAudioPcm(voicedChunk) == true
                         if (sent) {
                             wsAudioSentCount += 1
@@ -518,6 +623,8 @@ class LiveModeService : Service() {
                         }
                     }
                 }
+
+                speechOutputArbiter?.checkIdle(now)
                 delay(40)
             }
         }
@@ -530,8 +637,8 @@ class LiveModeService : Service() {
                     val openedLongEnough = now - wsOpenedAt > 15_000L
                     if (!wsForceMemoriesFallback && wsAudioSentCount >= 8 && openedLongEnough && staleInbound) {
                         wsForceMemoriesFallback = true
-                        AuditLogger.log(this@LiveModeService, "ws_no_reply:fallback_to_memories")
-                        avatarOverlay?.updateMessage("WS no response, switching to Memories…")
+                        AuditLogger.log(this@LiveModeService, "ws_no_reply:fallback_to_provider")
+                        avatarOverlay?.updateMessage("WS no response, switching to provider fallback…")
                     }
                     delay(2500L)
                 }
@@ -545,8 +652,9 @@ class LiveModeService : Service() {
                     val cooldownDone = now - wsLastNoReplyAlertAt > 20_000L
                     if (wsAudioSentCount >= 8 && openedLongEnough && staleInbound && cooldownDone) {
                         wsLastNoReplyAlertAt = now
-                        AuditLogger.log(this@LiveModeService, "ws_no_reply:no_fallback_available")
-                        avatarOverlay?.updateMessage("WS no response. Enable Memories for backup.")
+                        wsForceMemoriesFallback = true
+                        AuditLogger.log(this@LiveModeService, "ws_no_reply:force_provider_fallback")
+                        avatarOverlay?.updateMessage("WS no response. Provider fallback active.")
                     }
                     delay(2500L)
                 }
@@ -638,6 +746,11 @@ class LiveModeService : Service() {
             }
 
             is SttTranscriptEvent.Partial -> {
+                activeVoiceMode = ConsentStore.getLiveVoiceMode(this)
+                if (activeVoiceMode == "push_to_talk" && !pushToTalkPressed) {
+                    return
+                }
+
                 val text = event.text.trim().take(260)
                 if (text.isBlank()) return
                 if (text.equals(lastSttPartialText, ignoreCase = true)) return
@@ -657,11 +770,17 @@ class LiveModeService : Service() {
                     voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
                 }
                 voiceStateMachine.onEvent(VoiceSessionEvent.SttPartial(text))
+                avatarOverlay?.updateMessage("You: $text")
                 AuditLogger.log(this, "stt_partial:${text.take(60)}")
                 publishSttDebugStatus()
             }
 
             is SttTranscriptEvent.Final -> {
+                activeVoiceMode = ConsentStore.getLiveVoiceMode(this)
+                if (activeVoiceMode == "push_to_talk" && !pushToTalkPressed) {
+                    return
+                }
+
                 val text = event.text.trim().take(320)
                 if (text.isBlank()) return
 
@@ -680,8 +799,24 @@ class LiveModeService : Service() {
                     voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
                 }
                 voiceStateMachine.onEvent(VoiceSessionEvent.SttFinal(text))
-                voiceStateMachine.onEvent(VoiceSessionEvent.LlmRequestStarted)
+                val wsPreferred = wsClient != null && !wsForceMemoriesFallback && !wsProtocolBroken
+                dialogOrchestrator?.handleFinalTranscript(
+                    transcript = text,
+                    voiceMode = activeVoiceMode,
+                    wsPreferred = wsPreferred,
+                    wsSender = { _, spokenText ->
+                        val payload = JSONObject()
+                            .put("type", "user_text")
+                            .put("text", spokenText)
+                            .put("mode", activeVoiceMode)
+                            .toString()
+                        wsClient?.sendText(payload) == true
+                    }
+                )
                 userSpeechActive = false
+                if (activeVoiceMode == "push_to_talk") {
+                    pushToTalkPressed = false
+                }
                 AuditLogger.log(this, "stt_final:${text.take(80)}")
                 publishSttDebugStatus()
             }
@@ -854,18 +989,13 @@ class LiveModeService : Service() {
 
         // TODO: If upstream WS protocol supports explicit cancel event, replace this payload.
         runCatching { wsClient?.sendText("{\"type\":\"assistant_interrupt\"}") }
-
-        runCatching { ttsPlayer?.stop() }
-        ttsPlayer = StreamingTtsPlayer().also { it.start() }
-
-        runCatching { localTtsSpeaker?.shutdown() }
-        localTtsSpeaker = LiveLocalTtsSpeaker(this)
+        voiceStateMachine.onEvent(VoiceSessionEvent.UserInterruptedAssistant(reason))
+        dialogOrchestrator?.onUserInterrupted()
+        speechOutputArbiter?.stopNow(reason)
 
         assistantOutputTickAt = 0L
         bargeInController.markAssistantOutputStopped()
         bargeInController.markInterrupted()
-        voiceStateMachine.onEvent(VoiceSessionEvent.UserInterruptedAssistant(reason))
-        voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
     }
 
     private fun extractSpeakableText(raw: String): String? {
@@ -943,7 +1073,7 @@ class LiveModeService : Service() {
                 }
                 lastMemoriesNormalizedText = normalized
                 lastMemoriesSpeechAt = now
-                localTtsSpeaker?.speak(trimmed)
+                speechOutputArbiter?.speakText(trimmed)
                 AuditLogger.log(this@LiveModeService, "memories_text:${trimmed.take(60)}")
             }
         } else {
