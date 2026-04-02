@@ -116,6 +116,43 @@ esac
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
+# Prefer a Gradle-compatible JDK when JAVA_HOME is unset (common on ARM devices
+# where `java` may default to JDK 21, which can break this project setup).
+if [ -z "$JAVA_HOME" ] ; then
+    for CANDIDATE in \
+        /usr/lib/jvm/java-17-openjdk-amd64 \
+        /usr/lib/jvm/java-17-openjdk-arm64 \
+        /usr/lib/jvm/temurin-17-jdk-amd64 \
+        /usr/lib/jvm/java-11-openjdk-amd64 \
+        /usr/lib/jvm/java-11-openjdk-arm64 \
+        /usr/lib/jvm/java-1.11.0-openjdk-amd64 \
+        /usr/lib/jvm/java-1.11.0-openjdk-arm64
+    do
+        if [ -x "$CANDIDATE/bin/java" ] ; then
+            JAVA_HOME="$CANDIDATE"
+            export JAVA_HOME
+            break
+        fi
+    done
+fi
+
+# ARM hosts may download x86_64 AAPT2 from Maven; force local binary when present.
+if [ -z "$ANDROID_AAPT2_OVERRIDE" ] ; then
+    case "$(uname -m)" in
+      aarch64|arm64|armv7l|armv8l)
+        if [ -x "/usr/bin/aapt2" ] ; then
+            ANDROID_AAPT2_OVERRIDE=/usr/bin/aapt2
+        fi
+        ;;
+    esac
+fi
+if [ -n "$ANDROID_AAPT2_OVERRIDE" ] ; then
+    case " $* " in
+      *" -Pandroid.aapt2FromMavenOverride="*) ;;
+      *) set -- "-Pandroid.aapt2FromMavenOverride=$ANDROID_AAPT2_OVERRIDE" "$@" ;;
+    esac
+fi
+
 
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
