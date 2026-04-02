@@ -18,11 +18,15 @@ import com.aria.assistant.AiReliabilityLogger
 import com.aria.assistant.R
 import com.aria.assistant.automation.AutomationAuditLogger
 import com.google.android.material.button.MaterialButton
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class LiveSafetyActivity : AppCompatActivity() {
 
     private lateinit var stateBadge: TextView
     private lateinit var statusText: TextView
+    private lateinit var sttHealthText: TextView
     private lateinit var auditText: TextView
     private lateinit var automationAuditText: TextView
     private lateinit var toggleAvatarButton: MaterialButton
@@ -40,6 +44,7 @@ class LiveSafetyActivity : AppCompatActivity() {
 
         stateBadge = findViewById(R.id.liveStateBadge)
         statusText = findViewById(R.id.liveSafetyStatus)
+        sttHealthText = findViewById(R.id.sttHealthText)
         auditText = findViewById(R.id.liveAuditText)
         automationAuditText = findViewById(R.id.automationAuditText)
         toggleAvatarButton = findViewById(R.id.toggleLiveAvatarButton)
@@ -147,6 +152,7 @@ class LiveSafetyActivity : AppCompatActivity() {
                 .apply()
             AutomationAuditLogger.clear(this)
             AiReliabilityLogger.clear(this)
+            LiveSttDebugStore.clear(this)
             refreshUi()
         }
 
@@ -186,6 +192,7 @@ class LiveSafetyActivity : AppCompatActivity() {
         val sessionActive = ConsentStore.isSessionActive(this)
         val rem = ConsentStore.getRemainingSessionMs(this)
         val active = liveEnabled && sessionActive
+        val sttDebug = LiveSttDebugStore.read(this)
 
         statusText.text = buildString {
             append("Live Enabled: ")
@@ -224,6 +231,27 @@ class LiveSafetyActivity : AppCompatActivity() {
             ) {
                 append("\n⚠ Memories-only mode needs Live Vision ON")
             }
+        }
+
+        sttHealthText.text = buildString {
+            append("Availability: ")
+            append(sttDebug.availabilityStatus.uppercase())
+            append("\nFailures: ")
+            append(sttDebug.failureCount)
+            append("\nTimeouts: ")
+            append(sttDebug.timeoutCount)
+            append("\nUnavailable: ")
+            append(sttDebug.unavailableCount)
+            append("\nLast Retry Delay: ")
+            append(if (sttDebug.lastRetryDelayMs > 0L) "${sttDebug.lastRetryDelayMs}ms" else "N/A")
+            append("\nRetry Active: ")
+            append(if (sttDebug.retryActive) "YES" else "NO")
+            append("\nLast Success: ")
+            append(formatDebugTime(sttDebug.lastSuccessAtMs))
+            append("\nVoice State: ")
+            append(sttDebug.voiceState.uppercase())
+            append("\nUpdated: ")
+            append(formatDebugTime(sttDebug.updatedAtMs))
         }
 
         val avatarOn = ConsentStore.isAvatarEnabled(this)
@@ -287,6 +315,12 @@ class LiveSafetyActivity : AppCompatActivity() {
         badgePulseAnimator?.cancel()
         badgePulseAnimator = null
         stateBadge.alpha = 1f
+    }
+
+    private fun formatDebugTime(ms: Long): String {
+        if (ms <= 0L) return "N/A"
+        val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        return formatter.format(Date(ms))
     }
 
     private fun showEndpointConfigDialog() {

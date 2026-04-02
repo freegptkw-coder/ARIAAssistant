@@ -7,8 +7,17 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.aria.assistant.RootCommandExecutor
+import com.aria.assistant.live.core.AudioFocusArbiter
+import com.aria.assistant.live.core.BargeInController
+import com.aria.assistant.live.core.SttHealthSnapshot
+import com.aria.assistant.live.core.SttHealthTracker
+import com.aria.assistant.live.core.SttTranscriptEvent
+import com.aria.assistant.live.core.StreamingSttGateway
+import com.aria.assistant.live.core.VoiceSessionEvent
+import com.aria.assistant.live.core.VoiceTurnStateMachine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -62,18 +71,109 @@ class LiveModeService : Service() {
     private var wsAudioSentCount: Int = 0
     @Volatile
     private var wsLastNoReplyAlertAt: Long = 0L
+    @Volatile
+    private var assistantOutputTickAt: Long = 0L
+    @Volatile
+    private var userSpeechActive: Boolean = false
+    @Volatile
+    private var lastUserSpeechAt: Long = 0L
+    @Volatile
+    private var lastSttPartialText: String = ""
+    @Volatile
+    private var suppressAssistantAudioByFocus: Boolean = false
+    @Volatile
+    private var duckAssistantAudioByFocus: Boolean = false
+
+    private lateinit var voiceStateMachine: VoiceTurnStateMachine
+    private lateinit var bargeInController: BargeInController
+    private lateinit var audioFocusArbiter: AudioFocusArbiter
+    private var sttGateway: StreamingSttGateway? = null
+    private val sttHealthTracker = SttHealthTracker()
+    private var sttRetryJob: Job? = null
+    @Volatile
+    private var sttAvailabilityStatus: String = "idle"
+    @Volatile
+    private var sttFailureCount: Int = 0
+    @Volatile
+    private var sttTimeoutCount: Int = 0
+    @Volatile
+    private var sttUnavailableCount: Int = 0
+    @Volatile
+    private var sttLastRetryDelayMs: Long = 0L
+    @Volatile
+    private var sttLastSuccessAtMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
+        voiceStateMachine = VoiceTurnStateMachine { from, to, event ->
+            val toLabel = to.name.lowercase()
+            AuditLogger.log(
+                this,
+                "voice_state:${from.name.lowercase()}->${to.name.lowercase()}:${event.compactName()}"
+            )
+            publishSttDebugStatus(voiceStateOverride = toLabel)
+        }
+        bargeInController = BargeInController()
+        audioFocusArbiter = AudioFocusArbiter(this) { state, rawChange ->
+            when (state) {
+                AudioFocusArbiter.AudioFocusState.GAINED -> {
+                    suppressAssistantAudioByFocus = false
+                    duckAssistantAudioByFocus = false
+                    AuditLogger.log(this, "audio_focus:gained:$rawChange")
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_gained"))
+                }
+
+                AudioFocusArbiter.AudioFocusState.LOSS_TRANSIENT -> {
+                    suppressAssistantAudioByFocus = true
+                    duckAssistantAudioByFocus = false
+                    AuditLogger.log(this, "audio_focus:loss_transient:$rawChange")
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_loss_transient"))
+                    if (running) interruptAssistantSpeech("audio_focus_loss_transient")
+                }
+
+                AudioFocusArbiter.AudioFocusState.LOSS_TRANSIENT_CAN_DUCK -> {
+                    suppressAssistantAudioByFocus = false
+                    duckAssistantAudioByFocus = true
+                    AuditLogger.log(this, "audio_focus:duck:$rawChange")
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_loss_can_duck"))
+                }
+
+                AudioFocusArbiter.AudioFocusState.LOSS_PERMANENT -> {
+                    suppressAssistantAudioByFocus = true
+                    duckAssistantAudioByFocus = false
+                    AuditLogger.log(this, "audio_focus:loss_permanent:$rawChange")
+                    voiceStateMachine.onEvent(VoiceSessionEvent.BackendFailure("audio_focus_loss_permanent"))
+                    if (running) interruptAssistantSpeech("audio_focus_loss_permanent")
+                }
+
+                AudioFocusArbiter.AudioFocusState.FAILED -> {
+                    suppressAssistantAudioByFocus = false
+                    duckAssistantAudioByFocus = false
+                    AuditLogger.log(this, "audio_focus:request_failed:$rawChange")
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_request_failed"))
+                }
+
+                AudioFocusArbiter.AudioFocusState.IDLE -> {
+                    suppressAssistantAudioByFocus = false
+                    duckAssistantAudioByFocus = false
+                    AuditLogger.log(this, "audio_focus:idle:$rawChange")
+                }
+            }
+        }
         LiveNotification.ensureChannel(this)
         startForeground(LiveNotification.NOTIFICATION_ID, LiveNotification.build(this))
         localTtsSpeaker = LiveLocalTtsSpeaker(this)
+        sttGateway = StreamingSttGateway.createDefault(this) { event ->
+            handleSttTranscriptEvent(event)
+        }
+        publishSttDebugStatus(voiceStateOverride = "idle")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == LiveNotification.ACTION_STOP) {
             ConsentStore.endSession(this)
             ConsentStore.setLiveEnabled(this, false)
+            cancelPendingSttRetry("panic_action")
             AuditLogger.log(this, "live_stopped:panic_action")
             stopSelf()
             return START_NOT_STICKY
@@ -81,12 +181,14 @@ class LiveModeService : Service() {
 
         if (!ConsentStore.isLiveEnabled(this)) {
             AuditLogger.log(this, "live_not_started:consent_disabled")
+            cancelPendingSttRetry("consent_disabled")
             stopSelf()
             return START_NOT_STICKY
         }
 
         if (!hasMicPermission()) {
             AuditLogger.log(this, "live_not_started:mic_permission_missing")
+            cancelPendingSttRetry("mic_permission_missing")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -99,6 +201,7 @@ class LiveModeService : Service() {
             } else {
                 ConsentStore.setLiveEnabled(this, false)
                 AuditLogger.log(this, "live_not_started:session_missing_or_expired")
+                cancelPendingSttRetry("session_missing_or_expired")
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -114,6 +217,12 @@ class LiveModeService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (this::voiceStateMachine.isInitialized) {
+            voiceStateMachine.onEvent(VoiceSessionEvent.SessionStopped)
+        }
+        if (this::audioFocusArbiter.isInitialized) {
+            audioFocusArbiter.abandonFocus()
+        }
         recorder?.stop()
         recorder = null
         ttsPlayer?.stop()
@@ -122,8 +231,13 @@ class LiveModeService : Service() {
         localTtsSpeaker = null
         avatarOverlay?.hide()
         avatarOverlay = null
+        cancelPendingSttRetry("service_destroy")
         wsClient?.close()
         wsClient = null
+        sttGateway?.stop()
+        applySttHealthSnapshot(sttHealthTracker.resetAll())
+        sttAvailabilityStatus = "stopped"
+        publishSttDebugStatus(voiceStateOverride = "idle")
 
         serviceScope.cancel()
         AuditLogger.log(this, "live_stopped")
@@ -139,9 +253,36 @@ class LiveModeService : Service() {
 
     private fun startPipelines() {
         AuditLogger.log(this, "live_started")
+        voiceStateMachine.onEvent(VoiceSessionEvent.SessionStarted)
+        userSpeechActive = false
+        lastUserSpeechAt = 0L
+        lastSttPartialText = ""
+        applySttHealthSnapshot(sttHealthTracker.resetAll())
+        sttAvailabilityStatus = "starting"
+        sttLastRetryDelayMs = 0L
+        sttLastSuccessAtMs = 0L
+        cancelPendingSttRetry("session_start")
+        publishSttDebugStatus(voiceStateOverride = voiceStateMachine.currentState.name.lowercase())
+
+        val focusGranted = audioFocusArbiter.requestSessionFocus()
+        if (!focusGranted) {
+            AuditLogger.log(this, "audio_focus:initial_request_failed")
+            voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("audio_focus_initial_request_failed"))
+        }
 
         recorder = SafeAudioRecorder().also { it.start() }
         ttsPlayer = StreamingTtsPlayer().also { it.start() }
+        runCatching { sttGateway?.start() }
+            .onFailure {
+                AuditLogger.log(this, "stt_start_error:${it.javaClass.simpleName}")
+                val snapshot = sttHealthTracker.onRecoverableError()
+                applySttHealthSnapshot(snapshot)
+                sttAvailabilityStatus = "start_error"
+                publishSttDebugStatus()
+                if (snapshot.shouldScheduleRetry) {
+                    scheduleSttRetry(snapshot.cooldownMs, "initial_start_error")
+                }
+            }
 
         if (ConsentStore.isAvatarEnabled(this)) {
             avatarOverlay = LiveAvatarOverlay(this).also { it.show() }
@@ -168,6 +309,7 @@ class LiveModeService : Service() {
             AuditLogger.log(this, "live_not_started:no_backend_configured")
             avatarOverlay?.updateMessage("No backend set. Configure WS or Memories.ai API key.")
             localTtsSpeaker?.speak("Live backend missing. Configure WS or Memories key.")
+            cancelPendingSttRetry("no_backend_configured")
             stopSelf()
             return
         }
@@ -176,6 +318,7 @@ class LiveModeService : Service() {
             AuditLogger.log(this, "live_not_started:memories_requires_vision")
             avatarOverlay?.updateMessage("Enable Live Vision for Memories mode.")
             localTtsSpeaker?.speak("Memories mode needs live vision on.")
+            cancelPendingSttRetry("memories_requires_vision")
             stopSelf()
             return
         }
@@ -193,14 +336,27 @@ class LiveModeService : Service() {
             wsLastNoReplyAlertAt = 0L
             wsClient = RealtimeWsClient(
                 onBinaryAudioChunk = { chunk ->
-                    lastAudioChunkAt = System.currentTimeMillis()
-                    wsLastInboundAt = System.currentTimeMillis()
-                    avatarOverlay?.setSpeaking(true)
-                    serviceScope.launch {
-                        delay(650)
-                        avatarOverlay?.setSpeaking(false)
+                    if (!canRenderAssistantAudio()) {
+                        AuditLogger.log(this, "audio_chunk_drop:audio_focus_suppressed")
+                    } else {
+                        val now = System.currentTimeMillis()
+                        lastAudioChunkAt = now
+                        wsLastInboundAt = now
+                        assistantOutputTickAt = now
+                        bargeInController.markAssistantOutputStarted(now)
+                        voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioChunk(source = "ws_binary"))
+                        avatarOverlay?.setSpeaking(true)
+                        serviceScope.launch {
+                            val marker = now
+                            delay(650)
+                            if (assistantOutputTickAt == marker || System.currentTimeMillis() - assistantOutputTickAt > 650L) {
+                                avatarOverlay?.setSpeaking(false)
+                                bargeInController.markAssistantOutputStopped()
+                                voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
+                            }
+                        }
+                        ttsPlayer?.playChunk(chunk)
                     }
-                    ttsPlayer?.playChunk(chunk)
                 },
                 onTextEvent = { textEvent ->
                     AuditLogger.log(this, "ws_text:${textEvent.take(40)}")
@@ -210,15 +366,36 @@ class LiveModeService : Service() {
                     }
                     val speakable = extractSpeakableText(textEvent)
                     if (!speakable.isNullOrBlank()) {
+                        voiceStateMachine.onEvent(VoiceSessionEvent.LlmResponseChunk(speakable))
                         avatarOverlay?.updateMessage(speakable)
                         if (System.currentTimeMillis() - lastAudioChunkAt > 1400L) {
-                            localTtsSpeaker?.speak(speakable)
+                            if (duckAssistantAudioByFocus) {
+                                AuditLogger.log(this, "audio_focus:duck_skip_local_tts")
+                            } else if (!canRenderAssistantAudio()) {
+                                AuditLogger.log(this, "audio_focus:suppress_local_tts")
+                            } else {
+                                val now = System.currentTimeMillis()
+                                assistantOutputTickAt = now
+                                bargeInController.markAssistantOutputStarted(now)
+                                voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioStarted(source = "local_tts"))
+                                localTtsSpeaker?.speak(speakable)
+                                serviceScope.launch {
+                                    val marker = now
+                                    val estimatedMs = (speakable.length * 45L).coerceIn(900L, 5000L)
+                                    delay(estimatedMs)
+                                    if (assistantOutputTickAt == marker || System.currentTimeMillis() - assistantOutputTickAt > estimatedMs) {
+                                        bargeInController.markAssistantOutputStopped()
+                                        voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
+                                    }
+                                }
+                            }
                         }
                     }
                     onProactiveTextEvent?.invoke(textEvent)
                 },
                 onClosed = { reason ->
                     AuditLogger.log(this, reason)
+                    voiceStateMachine.onEvent(VoiceSessionEvent.BackendFailure(reason))
                     val low = reason.lowercase()
                     if (
                         low.contains("1002") ||
@@ -258,6 +435,7 @@ class LiveModeService : Service() {
             while (running && isActive) {
                 if (!ConsentStore.isLiveEnabled(this@LiveModeService)) {
                     AuditLogger.log(this@LiveModeService, "live_auto_stop:consent_revoked")
+                    cancelPendingSttRetry("consent_revoked")
                     stopSelf()
                     break
                 }
@@ -269,13 +447,67 @@ class LiveModeService : Service() {
                     } else {
                         ConsentStore.setLiveEnabled(this@LiveModeService, false)
                         AuditLogger.log(this@LiveModeService, "live_auto_stop:session_expired")
+                        cancelPendingSttRetry("session_expired")
                         stopSelf()
                         break
                     }
                 }
 
-                val voicedChunk = recorder?.readVoicedChunkOrNull()
+                val voiceFrame = recorder?.readVoiceFrameOrNull()
+                val now = System.currentTimeMillis()
+                val voicedChunk = voiceFrame?.voicedChunk
+                sttGateway?.onVoiceActivity(voiceFrame?.speechActive == true)
+
+                if (voiceFrame != null) {
+                    if (voiceFrame.speechStarted) {
+                        lastUserSpeechAt = now
+                        if (!userSpeechActive) {
+                            userSpeechActive = true
+                            voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
+                        }
+                    }
+
+                    if (voiceFrame.speechActive) {
+                        lastUserSpeechAt = now
+                        if (!userSpeechActive) {
+                            userSpeechActive = true
+                            voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
+                        }
+                    }
+
+                    if (voiceFrame.speechEnded) {
+                        if (userSpeechActive) {
+                            userSpeechActive = false
+                            voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechEnded)
+                        }
+                    }
+
+                    if (voiceFrame.usedFallbackVad) {
+                        if (voicedChunk != null) {
+                            lastUserSpeechAt = now
+                            if (!userSpeechActive) {
+                                userSpeechActive = true
+                                voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
+                            }
+                        } else if (userSpeechActive && now - lastUserSpeechAt > 700L) {
+                            userSpeechActive = false
+                            voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechEnded)
+                        }
+                    }
+                } else if (userSpeechActive && now - lastUserSpeechAt > 700L) {
+                    userSpeechActive = false
+                    voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechEnded)
+                }
+
                 if (voicedChunk != null) {
+                    val decision = bargeInController.evaluateUserSpeechInterruption(
+                        currentState = voiceStateMachine.currentState,
+                        nowMs = now
+                    )
+                    if (decision.shouldInterrupt) {
+                        interruptAssistantSpeech(decision.reason)
+                    }
+
                     if (wsClient != null) {
                         val sent = wsClient?.sendAudioPcm(voicedChunk) == true
                         if (sent) {
@@ -391,6 +623,251 @@ class LiveModeService : Service() {
         }
     }
 
+    private fun handleSttTranscriptEvent(event: SttTranscriptEvent) {
+        when (event) {
+            SttTranscriptEvent.ListeningStarted -> {
+                AuditLogger.log(this, "stt_listening_started")
+                sttAvailabilityStatus = "listening"
+                publishSttDebugStatus()
+            }
+
+            SttTranscriptEvent.ListeningStopped -> {
+                AuditLogger.log(this, "stt_listening_stopped")
+                sttAvailabilityStatus = "stopped"
+                publishSttDebugStatus()
+            }
+
+            is SttTranscriptEvent.Partial -> {
+                val text = event.text.trim().take(260)
+                if (text.isBlank()) return
+                if (text.equals(lastSttPartialText, ignoreCase = true)) return
+
+                val now = System.currentTimeMillis()
+                lastSttPartialText = text
+                lastUserSpeechAt = now
+                sttLastSuccessAtMs = now
+                applySttHealthSnapshot(sttHealthTracker.resetOnSuccess(now))
+                sttAvailabilityStatus = "active"
+                if (sttRetryJob?.isActive == true) {
+                    cancelPendingSttRetry("stt_partial_recovered")
+                    AuditLogger.log(this, "stt_health:recovered:partial")
+                }
+                if (!userSpeechActive) {
+                    userSpeechActive = true
+                    voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
+                }
+                voiceStateMachine.onEvent(VoiceSessionEvent.SttPartial(text))
+                AuditLogger.log(this, "stt_partial:${text.take(60)}")
+                publishSttDebugStatus()
+            }
+
+            is SttTranscriptEvent.Final -> {
+                val text = event.text.trim().take(320)
+                if (text.isBlank()) return
+
+                val now = System.currentTimeMillis()
+                lastSttPartialText = ""
+                lastUserSpeechAt = now
+                sttLastSuccessAtMs = now
+                applySttHealthSnapshot(sttHealthTracker.resetOnSuccess(now))
+                sttAvailabilityStatus = "active"
+                if (sttRetryJob?.isActive == true) {
+                    cancelPendingSttRetry("stt_final_recovered")
+                    AuditLogger.log(this, "stt_health:recovered:final")
+                }
+                if (!userSpeechActive) {
+                    userSpeechActive = true
+                    voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechDetected)
+                }
+                voiceStateMachine.onEvent(VoiceSessionEvent.SttFinal(text))
+                voiceStateMachine.onEvent(VoiceSessionEvent.LlmRequestStarted)
+                userSpeechActive = false
+                AuditLogger.log(this, "stt_final:${text.take(80)}")
+                publishSttDebugStatus()
+            }
+
+            is SttTranscriptEvent.Error -> {
+                AuditLogger.log(this, "stt_error:${event.reason}:${event.code}")
+                if (event.recoverable) {
+                    val snapshot = sttHealthTracker.onRecoverableError()
+                    applySttHealthSnapshot(snapshot)
+                    sttAvailabilityStatus = "degraded"
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("stt_error_${event.reason}"))
+                    publishSttDebugStatus()
+                    if (snapshot.shouldScheduleRetry) {
+                        scheduleSttRetry(snapshot.cooldownMs, "recoverable_${event.reason}")
+                    }
+                } else {
+                    val snapshot = sttHealthTracker.onUnrecoverableError()
+                    applySttHealthSnapshot(snapshot)
+                    sttAvailabilityStatus = "unavailable"
+                    voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("stt_unavailable_${event.reason}"))
+                    publishSttDebugStatus()
+                    scheduleSttRetry(snapshot.cooldownMs, "unrecoverable_${event.reason}")
+                }
+            }
+
+            SttTranscriptEvent.Timeout -> {
+                AuditLogger.log(this, "stt_timeout")
+                val snapshot = sttHealthTracker.onTimeout()
+                applySttHealthSnapshot(snapshot)
+                sttAvailabilityStatus = "timeout"
+                if (userSpeechActive) {
+                    userSpeechActive = false
+                    voiceStateMachine.onEvent(VoiceSessionEvent.UserSpeechEnded)
+                }
+                voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("stt_timeout"))
+                publishSttDebugStatus()
+                if (snapshot.shouldScheduleRetry) {
+                    scheduleSttRetry(snapshot.cooldownMs, "timeout_pattern")
+                }
+            }
+
+            SttTranscriptEvent.Unavailable -> {
+                AuditLogger.log(this, "stt_unavailable")
+                val snapshot = sttHealthTracker.onUnavailable()
+                applySttHealthSnapshot(snapshot)
+                sttAvailabilityStatus = "unavailable"
+                voiceStateMachine.onEvent(VoiceSessionEvent.RecoverableWarning("stt_unavailable"))
+                publishSttDebugStatus()
+                scheduleSttRetry(snapshot.cooldownMs, "gateway_unavailable")
+            }
+        }
+    }
+
+    private fun scheduleSttRetry(delayMs: Long, reason: String) {
+        if (!running) return
+
+        val boundedDelayMs = delayMs.coerceIn(1500L, 60_000L)
+        val existing = sttRetryJob
+        if (existing?.isActive == true) {
+            AuditLogger.log(this, "stt_retry:already_scheduled:$reason")
+            publishSttDebugStatus()
+            return
+        }
+
+        sttLastRetryDelayMs = boundedDelayMs
+        sttAvailabilityStatus = "retry_scheduled"
+        AuditLogger.log(this, "stt_retry:scheduled:${boundedDelayMs}ms:$reason")
+        val job = serviceScope.launch {
+            publishSttDebugStatus(retryActiveOverride = true)
+            delay(boundedDelayMs)
+            if (!running || !ConsentStore.isLiveEnabled(this@LiveModeService)) {
+                sttAvailabilityStatus = "retry_aborted"
+                publishSttDebugStatus(retryActiveOverride = false)
+                AuditLogger.log(this@LiveModeService, "stt_retry:aborted:not_running")
+                return@launch
+            }
+
+            sttAvailabilityStatus = "retry_trigger"
+            publishSttDebugStatus(retryActiveOverride = false)
+            AuditLogger.log(this@LiveModeService, "stt_retry:trigger:$reason")
+            runCatching { sttGateway?.start() }
+                .onFailure {
+                    AuditLogger.log(this@LiveModeService, "stt_retry:start_failed:${it.javaClass.simpleName}")
+                    val snapshot = sttHealthTracker.onRecoverableError()
+                    applySttHealthSnapshot(snapshot)
+                    sttAvailabilityStatus = "retry_start_failed"
+                    publishSttDebugStatus(retryActiveOverride = false)
+                    if (snapshot.shouldScheduleRetry) {
+                        sttRetryJob = null
+                        scheduleSttRetry(snapshot.cooldownMs, "retry_start_failed")
+                    }
+                }
+        }
+        sttRetryJob = job
+        publishSttDebugStatus(retryActiveOverride = true)
+        job.invokeOnCompletion {
+            if (sttRetryJob == job) {
+                sttRetryJob = null
+            }
+            publishSttDebugStatus(retryActiveOverride = false)
+        }
+    }
+
+    private fun cancelPendingSttRetry(reason: String) {
+        val existing = sttRetryJob
+        if (existing?.isActive == true) {
+            AuditLogger.log(this, "stt_retry:cancel:$reason")
+            existing.cancel()
+        }
+        sttRetryJob = null
+        publishSttDebugStatus(retryActiveOverride = false)
+    }
+
+    private fun applySttHealthSnapshot(snapshot: SttHealthSnapshot) {
+        sttFailureCount = snapshot.consecutiveFailures
+        sttTimeoutCount = snapshot.consecutiveTimeouts
+        sttUnavailableCount = snapshot.consecutiveUnavailable
+    }
+
+    private fun publishSttDebugStatus(
+        retryActiveOverride: Boolean? = null,
+        voiceStateOverride: String? = null
+    ) {
+        val voiceState = voiceStateOverride
+            ?: if (this::voiceStateMachine.isInitialized) {
+                voiceStateMachine.currentState.name.lowercase()
+            } else {
+                "idle"
+            }
+        val retryActive = retryActiveOverride ?: (sttRetryJob?.isActive == true)
+        LiveSttDebugStore.write(
+            this,
+            SttDebugStatus(
+                availabilityStatus = sttAvailabilityStatus,
+                failureCount = sttFailureCount,
+                timeoutCount = sttTimeoutCount,
+                unavailableCount = sttUnavailableCount,
+                lastRetryDelayMs = sttLastRetryDelayMs,
+                retryActive = retryActive,
+                lastSuccessAtMs = sttLastSuccessAtMs,
+                voiceState = voiceState,
+                updatedAtMs = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private fun canRenderAssistantAudio(): Boolean {
+        if (suppressAssistantAudioByFocus) return false
+
+        if (!this::audioFocusArbiter.isInitialized) return true
+        if (audioFocusArbiter.isOutputSuppressed()) return false
+
+        return if (audioFocusArbiter.isFocusHeld()) {
+            true
+        } else {
+            val ok = audioFocusArbiter.ensureFocusForOutput()
+            if (!ok) {
+                voiceStateMachine.onEvent(
+                    VoiceSessionEvent.RecoverableWarning("audio_focus_not_granted_for_output")
+                )
+            }
+            ok
+        }
+    }
+
+    private fun interruptAssistantSpeech(reason: String) {
+        AuditLogger.log(this, "barge_in:interrupt:$reason")
+        avatarOverlay?.setSpeaking(false)
+        avatarOverlay?.updateMessage("Interrupted. Listening...")
+
+        // TODO: If upstream WS protocol supports explicit cancel event, replace this payload.
+        runCatching { wsClient?.sendText("{\"type\":\"assistant_interrupt\"}") }
+
+        runCatching { ttsPlayer?.stop() }
+        ttsPlayer = StreamingTtsPlayer().also { it.start() }
+
+        runCatching { localTtsSpeaker?.shutdown() }
+        localTtsSpeaker = LiveLocalTtsSpeaker(this)
+
+        assistantOutputTickAt = 0L
+        bargeInController.markAssistantOutputStopped()
+        bargeInController.markInterrupted()
+        voiceStateMachine.onEvent(VoiceSessionEvent.UserInterruptedAssistant(reason))
+        voiceStateMachine.onEvent(VoiceSessionEvent.AssistantAudioFinished)
+    }
+
     private fun extractSpeakableText(raw: String): String? {
         val text = raw.trim()
         if (text.isBlank()) return null
@@ -456,6 +933,14 @@ class LiveModeService : Service() {
             }
 
             if (shouldSpeak && now - lastAudioChunkAt > 1600L) {
+                if (duckAssistantAudioByFocus) {
+                    AuditLogger.log(this@LiveModeService, "audio_focus:duck_skip_memories_tts")
+                    return
+                }
+                if (!canRenderAssistantAudio()) {
+                    AuditLogger.log(this@LiveModeService, "audio_focus:suppress_memories_tts")
+                    return
+                }
                 lastMemoriesNormalizedText = normalized
                 lastMemoriesSpeechAt = now
                 localTtsSpeaker?.speak(trimmed)
